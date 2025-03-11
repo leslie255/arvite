@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use cgmath::*;
 use glium::{
@@ -10,6 +10,7 @@ use glium::{
 };
 
 use crate::{
+    bezier,
     color::Color,
     input::InputHelper,
     rect::Rect,
@@ -144,13 +145,14 @@ pub struct Application<'cx> {
     input_helper: InputHelper,
     fps_counter: FpsCounter,
     text: Line<'static, 'cx>,
-    test_rect: Rect<'cx>,
-    test_rect2: Rect<'cx>,
+    rect_floating: Rect<'cx>,
+    rect_point: Rect<'cx>,
     context: &'cx Context,
 }
 
 impl<'cx> Application<'cx> {
     pub fn new(context: &'cx Context, window: winit::window::Window) -> Self {
+        let scale_factor = window.scale_factor() as f32;
         Self {
             window,
             input_helper: InputHelper::new(),
@@ -158,26 +160,21 @@ impl<'cx> Application<'cx> {
             last_window_event: Instant::now(),
             text: {
                 let mut line = Line::new(context);
-                line.set_string("HELLO, WORLD!".into());
+                line.set_string("t = --.--".into());
                 line.set_fg_color(Color::new(1., 1., 1., 0.7));
                 line.set_bg_color(Color::new(0.5, 0.5, 0.5, 0.5));
-                line.set_shadow(true);
-                line.set_font_size(100.);
+                line.set_font_size(20. * scale_factor);
                 line
             },
-            test_rect: {
+            rect_floating: {
                 let mut rect = Rect::new(context);
-                rect.set_size(vec2(100., 100.));
-                rect.uniform_fill(Color::new(1., 0., 1., 1.));
+                rect.set_size(scale_factor * vec2(4., 4.));
                 rect
             },
-            test_rect2: {
+            rect_point: {
                 let mut rect = Rect::new(context);
-                rect.set_size(vec2(480., 360.));
-                rect.gradient_fill_horizontal(
-                    Color::new(1., 1., 0., 1.),
-                    Color::new(0., 1., 1., 1.),
-                );
+                rect.set_size(scale_factor * vec2(20., 20.));
+                rect.uniform_fill(Color::new(1., 1., 1., 1.));
                 rect
             },
             context,
@@ -186,11 +183,35 @@ impl<'cx> Application<'cx> {
 
     fn draw(&mut self) {
         let mut frame = self.context.display.draw();
+        let frame_size = Vector2::from(frame.get_dimensions()).map(|x| x as f32);
+
         self.clear_frame(&mut frame);
 
-        self.test_rect.draw(&mut frame, point2(100., 100.));
-        self.test_rect2.draw(&mut frame, point2(170., 150.));
-        self.text.draw(&mut frame, point2(200., 200.));
+        let seconds = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let t = (seconds.sin() as f32 + 1.) / 2.;
+
+        let ps = &[
+            point2(100., frame_size.y / 2.),
+            point2(frame_size.x - 100., 100.),
+            point2(frame_size.x / 2., frame_size.y / 2. + 200.),
+            point2(frame_size.x - 100., frame_size.y - 200.),
+            point2(100., frame_size.y / 2.),
+            point2(frame_size.x - 100., 100.),
+        ];
+        let p = bezier::lerp(ps, t);
+
+        self.rect_floating
+            .set_fill_color(Color::new(1. - t, 1., t, 1.).into());
+        self.rect_floating.draw(&mut frame, p.sub_element_wise(2.));
+        for p in ps {
+            self.rect_point.draw(&mut frame, p.sub_element_wise(10.));
+        }
+
+        // self.text.set_string(format!("t = {t}").into());
+        // self.text.draw(&mut frame, point2(10., 10.));
 
         frame.finish().unwrap();
         self.fps_counter.frame();

@@ -10,6 +10,7 @@ pub mod rect;
 pub mod resource;
 pub mod text;
 pub mod utils;
+pub mod bezier;
 
 use application::{Application, Context};
 
@@ -21,7 +22,7 @@ fn main() {
     let event_loop = winit::event_loop::EventLoop::builder().build().unwrap();
 
     let (window, display) = glutin::SimpleWindowBuilder::new()
-        .with_title("Demo")
+        .with_title("Bezier Curve Demo")
         .with_inner_size(800, 480)
         .build(&event_loop);
     let scale_factor = window.scale_factor();

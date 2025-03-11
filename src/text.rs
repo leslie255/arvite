@@ -172,6 +172,7 @@ impl<'a, 'cx> Line<'a, 'cx> {
 
     pub fn set_string(&mut self, string: Cow<'a, str>) {
         // TODO: this could be more efficient.
+        self.clear();
         self.string = String::with_capacity(string.len()).into();
         for char in string.chars() {
             self.push_char(char);
