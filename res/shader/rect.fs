@@ -1,6 +1,7 @@
 #version 140
 
 in vec4 vert_color;
+
 out vec4 frag_color;
 
 void main() {

@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use cgmath::*;
 use glium::{
@@ -13,8 +13,8 @@ use crate::{
     bezier,
     color::Color,
     input::InputHelper,
-    rect::Rect,
     resource::ResourceLoader,
+    shapes::{Circle, Path, Rect},
     text::{AtlasFont, Line},
 };
 
@@ -27,6 +27,7 @@ pub struct Context {
     pub(crate) loader: ResourceLoader,
     pub(crate) shader_text: glium::Program,
     pub(crate) shader_rect: glium::Program,
+    pub(crate) shader_circle: glium::Program,
     pub(crate) font: AtlasFont,
     pub(crate) display: glium::Display<glium::glutin::surface::WindowSurface>,
 }
@@ -37,6 +38,7 @@ impl Context {
         Self {
             shader_text: Self::load_shader(&display, &loader, "shader/text"),
             shader_rect: Self::load_shader(&display, &loader, "shader/rect"),
+            shader_circle: Self::load_shader(&display, &loader, "shader/circle"),
             font: Self::load_font(&display, &loader, "font/big_blue_terminal.json"),
             loader,
             display,
@@ -145,8 +147,10 @@ pub struct Application<'cx> {
     input_helper: InputHelper,
     fps_counter: FpsCounter,
     text: Line<'static, 'cx>,
-    rect_floating: Rect<'cx>,
-    rect_point: Rect<'cx>,
+    points: Rect<'cx>,
+    path: Path<'cx>,
+    fix_point_circles: Circle<'cx>,
+    epoch: Instant,
     context: &'cx Context,
 }
 
@@ -160,23 +164,26 @@ impl<'cx> Application<'cx> {
             last_window_event: Instant::now(),
             text: {
                 let mut line = Line::new(context);
-                line.set_string("t = --.--".into());
+                line.set_string("FPS : ---.---".into());
                 line.set_fg_color(Color::new(1., 1., 1., 0.7));
                 line.set_bg_color(Color::new(0.5, 0.5, 0.5, 0.5));
                 line.set_font_size(20. * scale_factor);
                 line
             },
-            rect_floating: {
+            points: {
                 let mut rect = Rect::new(context);
                 rect.set_size(scale_factor * vec2(4., 4.));
                 rect
             },
-            rect_point: {
-                let mut rect = Rect::new(context);
-                rect.set_size(scale_factor * vec2(20., 20.));
-                rect.uniform_fill(Color::new(1., 1., 1., 1.));
-                rect
+            path: Path::new(context),
+            fix_point_circles: {
+                let mut circle = Circle::new(context);
+                circle.set_outer_radius(scale_factor * 10.);
+                circle.set_inner_radius(scale_factor * 9.);
+                circle.uniform_fill(Color::new(1., 1., 1., 1.));
+                circle
             },
+            epoch: Instant::now(),
             context,
         }
     }
@@ -187,12 +194,6 @@ impl<'cx> Application<'cx> {
 
         self.clear_frame(&mut frame);
 
-        let seconds = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
-        let t = (seconds.sin() as f32 + 1.) / 2.;
-
         let ps = &[
             point2(100., frame_size.y / 2.),
             point2(frame_size.x - 100., 100.),
@@ -201,20 +202,27 @@ impl<'cx> Application<'cx> {
             point2(100., frame_size.y / 2.),
             point2(frame_size.x - 100., 100.),
         ];
-        let p = bezier::lerp(ps, t);
 
-        self.rect_floating
-            .set_fill_color(Color::new(1. - t, 1., t, 1.).into());
-        self.rect_floating.draw(&mut frame, p.sub_element_wise(2.));
         for p in ps {
-            self.rect_point.draw(&mut frame, p.sub_element_wise(10.));
+            self.fix_point_circles.draw(&mut frame, p - vec2(10., 10.));
         }
 
-        // self.text.set_string(format!("t = {t}").into());
-        // self.text.draw(&mut frame, point2(10., 10.));
+        if self.path.n_points() == 0 {
+            for t in (0..2000).map(|i| i as f32 / 2000.) {
+                let point = bezier::bezier(ps, t);
+                let color = Color::new(1. - t, 1., t, 1.);
+                self.path.push_point(point, color);
+            }
+        }
+
+        self.path.draw(&mut frame, point2(0., 0.));
+
+        self.text.draw(&mut frame, point2(10., 10.));
 
         frame.finish().unwrap();
-        self.fps_counter.frame();
+        if let Some(fps) = self.fps_counter.frame() {
+            self.text.set_string(format!("FPS: {fps:.3}").into());
+        }
     }
 
     fn clear_frame(&mut self, frame: &mut glium::Frame) {
@@ -260,6 +268,7 @@ impl winit::application::ApplicationHandler for Application<'_> {
                 self.context
                     .resize(Vector2::new(window_size.width, window_size.height));
                 self.window.request_redraw();
+                self.path.clear();
             }
             winit::event::WindowEvent::KeyboardInput {
                 device_id: _,

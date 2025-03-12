@@ -3,14 +3,14 @@
 use glium::{backend::glutin, winit};
 
 pub mod application;
+pub mod bezier;
 pub mod color;
 pub mod input;
 pub mod mesh;
-pub mod rect;
+pub mod shapes;
 pub mod resource;
 pub mod text;
 pub mod utils;
-pub mod bezier;
 
 use application::{Application, Context};
 

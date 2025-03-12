@@ -1,6 +1,6 @@
 //! Utilities for drawing.
 
-use std::ops::Add;
+use std::{fmt::{self, Debug}, ops::Add};
 
 use glium::Surface as _;
 
@@ -80,10 +80,10 @@ pub struct Mesh<'cx, V: Copy + glium::Vertex, I: Copy + glium::index::Index = u3
     needs_update: bool,
 }
 
-impl<V: Copy + glium::Vertex + std::fmt::Debug, I: Copy + glium::index::Index + std::fmt::Debug>
-    std::fmt::Debug for Mesh<'_, V, I>
+impl<V: Copy + glium::Vertex + Debug, I: Copy + glium::index::Index + Debug>
+    Debug for Mesh<'_, V, I>
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("SharedMesh")
             .field("vertices", &self.vertices)
             .field("indices", &self.indices)

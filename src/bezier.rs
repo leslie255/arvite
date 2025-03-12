@@ -1,32 +1,27 @@
 use cgmath::*;
 
-pub fn lerp2(ps: [Point2<f32>; 2], t: f32) -> Point2<f32> {
-    Point2::add_element_wise((1. - t) * ps[0], t * ps[1])
+pub fn lerp2(p0: Point2<f32>, p1: Point2<f32>, t: f32) -> Point2<f32> {
+    Point2::add_element_wise((1. - t) * p0, t * p1)
 }
 
-pub fn lerp3(ps: [Point2<f32>; 3], t: f32) -> Point2<f32> {
-    let p_0 = lerp2([ps[0], ps[1]], t);
-    let p_1 = lerp2([ps[1], ps[2]], t);
-    let ps_ = [p_0, p_1];
-    lerp2(ps_, t)
-}
-
-pub fn lerp4(ps: [Point2<f32>; 3], t: f32) -> Point2<f32> {
-    let p_0 = lerp2([ps[0], ps[1]], t);
-    let p_1 = lerp2([ps[1], ps[2]], t);
-    let ps_ = [p_0, p_1];
-    lerp2(ps_, t)
-}
-
-/// Very inefficient bezier lerp.
-pub fn lerp(ps: &[Point2<f32>], t: f32) -> Point2<f32> {
-    match ps {
-        [] => panic!(),
-        &[p] => p,
-        ps => {
-            let p0 = lerp(&ps[1..], t);
-            let p1 = lerp(&ps[..ps.len() - 1], t);
-            lerp2([p0, p1], t)
-        }
+pub fn bezier(ps: &[Point2<f32>], t: f32) -> Point2<f32> {
+    let n = ps.len() - 1;
+    let n_f = n as f32;
+    let mut coeff_acc = 1.0f32;
+    let mut result = point2::<f32>(0., 0.);
+    for (i, &p) in ps.iter().rev().enumerate() {
+        let i_f = i as f32;
+        // The binomial coefficient.
+        let coeff = {
+            if i != 0 {
+                coeff_acc *= n_f - i_f + 1.;
+                coeff_acc /= i_f;
+            }
+            coeff_acc
+        };
+        // The bernstein coefficient.
+        let b = coeff * (1. - t).powi((n - i) as i32) * t.powi((i) as i32);
+        result += b * p.to_vec();
     }
+    result
 }
