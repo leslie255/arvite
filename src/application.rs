@@ -13,7 +13,7 @@ use crate::{
     color::Color,
     context::Context,
     input::InputHelper,
-    shapes::{BezierPath, Circle},
+    shapes::{BezierSplinePath, Circle, Path, PathDrawingMode},
     text::Line,
 };
 
@@ -71,11 +71,12 @@ pub struct Application<'cx> {
     last_window_event: Instant,
     input_helper: InputHelper,
     fps_counter: FpsCounter,
-    text: Line<'static, 'cx>,
-    bezier_path: BezierPath<'static, 'cx>,
-    fix_point_circles: Circle<'cx>,
     epoch: Instant,
     context: &'cx Context,
+    text: Line<'static, 'cx>,
+    spline: BezierSplinePath<'static, 'cx>,
+    fix_point_circles: Circle<'cx>,
+    control_lines: Path<'cx>,
 }
 
 impl<'cx> Application<'cx> {
@@ -94,19 +95,25 @@ impl<'cx> Application<'cx> {
                 line.set_font_size(20. * scale_factor);
                 line
             },
-            bezier_path: {
-                let mut bezier_path = BezierPath::new(context);
-                bezier_path.set_draw_mode(crate::shapes::PathDrawingMode::Fill);
-                bezier_path.set_color0(Color::new(1., 0., 1., 1.));
-                bezier_path.set_color1(Color::new(0., 1., 1., 1.));
-                bezier_path
+            spline: {
+                let mut spline = BezierSplinePath::new(context);
+                spline.set_resolution(64);
+                spline.set_draw_mode(PathDrawingMode::Line);
+                spline.set_color0(Color::new(1., 1., 0., 1.));
+                spline.set_color1(Color::new(1., 0., 1., 1.));
+                spline
             },
             fix_point_circles: {
                 let mut circle = Circle::new(context);
-                circle.set_outer_radius(scale_factor * 10.);
-                circle.set_inner_radius(scale_factor * 9.);
+                circle.set_outer_radius(scale_factor * 4.);
+                circle.set_inner_radius(scale_factor * 3.);
                 circle.uniform_fill(Color::new(1., 1., 1., 1.));
                 circle
+            },
+            control_lines: {
+                let mut path = Path::new(context);
+                path.set_draw_mode(PathDrawingMode::Line);
+                path
             },
             epoch: Instant::now(),
             context,
@@ -118,12 +125,27 @@ impl<'cx> Application<'cx> {
 
         self.clear_frame(&mut frame);
 
-        for point in self.bezier_path.points() {
-            self.fix_point_circles
-                .draw(&mut frame, point - vec2(10., 10.));
-        }
+        let position = point2::<f32>(200., 200.);
 
-        self.bezier_path.draw(&mut frame, point2(0., 0.));
+        // Knots / control points.
+        for &point in self.spline.points() {
+            let r = self.fix_point_circles.outer_radius();
+            self.fix_point_circles
+                .draw(&mut frame, point + position.to_vec() - vec2(r / 2., r / 2.));
+            self.fix_point_circles
+                .uniform_fill(Color::new(1., 1., 1., 1.));
+        }
+        // Control lines.
+        for &[point0, point1] in self.spline.points().array_chunks::<2>() {
+            self.control_lines.clear();
+            self.control_lines
+                .push_point(point0, Color::new(0.5, 0.5, 0.5, 1.));
+            self.control_lines
+                .push_point(point1, Color::new(0.5, 0.5, 0.5, 1.));
+            self.control_lines.draw(&mut frame, position);
+        }
+        // The spline.
+        self.spline.draw(&mut frame, position);
 
         self.text.draw(&mut frame, point2(10., 10.));
 
@@ -150,16 +172,36 @@ impl<'cx> Application<'cx> {
     #[allow(unused_variables)]
     fn cursor_moved(&mut self, delta: Vector2<f32>) {}
 
+    #[allow(unused_variables)]
     fn resized(&mut self, frame_size: Vector2<f32>) {
-        let points = self.bezier_path.points_mut();
-        points.clear();
-        points.extend_from_slice(&[
-            point2(100., frame_size.y / 2.),
-            point2(frame_size.x - 100., frame_size.y - 200.),
-            point2(frame_size.x / 2. + 200., 200.),
-            point2(frame_size.x / 2., frame_size.y / 2. + 200.),
-            point2(frame_size.x - 100., 100.),
-        ]);
+        let scale_factor = self.window.scale_factor() as f32;
+        // M 209.682922 441.830322
+        // C 209.682922 441.830322 512.784424 235.796143 391.867676 72.83374
+        // C 277.502899 -81.298584 250.148407 188.090942 175.742783 84.677979
+        // C 114.818741 0.002441 65.932556 37.512939 32.682919 95.830322
+        // C -23.292421 194.006958 209.682922 441.830322 209.682922 441.830322 Z
+        let points = self.spline.points_mut();
+        if points.is_empty() {
+            #[allow(clippy::excessive_precision)]
+            points.extend_from_slice(&[
+                point2(209.682922, 441.830322),
+                point2(209.682922, 441.830322),
+                point2(512.784424, 235.796143),
+                point2(391.867676, 72.83374),
+                point2(391.867676, 72.83374),
+                point2(277.502899, -81.298584),
+                point2(250.148407, 188.090942),
+                point2(175.742783, 84.677979),
+                point2(175.742783, 84.677979),
+                point2(114.818741, 0.002441),
+                point2(65.932556, 37.512939),
+                point2(32.682919, 95.830322),
+                point2(32.682919, 95.830322),
+                point2(-23.292421, 194.006958),
+                point2(209.682922, 441.830322),
+                point2(209.682922, 441.830322),
+            ]);
+        }
     }
 }
 

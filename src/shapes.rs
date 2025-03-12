@@ -11,15 +11,6 @@ use crate::{
     mesh::{self, Mesh},
 };
 
-fn lerp_color(color0: Color, color1: Color, t: f32) -> Color {
-    Color::new(
-        color0.r * (1. - t) + color1.r * t,
-        color0.g * (1. - t) + color1.g * t,
-        color0.b * (1. - t) + color1.b * t,
-        color0.a * (1. - t) + color1.a * t,
-    )
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathDrawingMode {
     Line,
@@ -34,6 +25,106 @@ pub(crate) struct ColoredVertex {
 }
 
 glium::implement_vertex!(ColoredVertex, position, color);
+
+#[derive(Debug)]
+pub struct BezierSplinePath<'a, 'cx> {
+    path: Path<'cx>,
+    points: Cow<'a, [Point2<f32>]>,
+    color0: Color,
+    color1: Color,
+    resolution: u32,
+    needs_rebuild: bool,
+}
+
+impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
+    pub fn new(context: &'cx Context) -> Self {
+        Self {
+            path: Path::new(context),
+            points: Cow::default(),
+            color0: Color::default(),
+            color1: Color::default(),
+            resolution: 48,
+            needs_rebuild: false,
+        }
+    }
+
+    pub fn points<'b>(&'b self) -> &'b [Point2<f32>]
+    where
+        'a: 'b,
+    {
+        &self.points
+    }
+
+    pub fn points_mut(&mut self) -> &mut Vec<Point2<f32>> {
+        self.needs_rebuild = true;
+        let points = mem::take(&mut self.points);
+        self.points = points.into_owned().into();
+        unsafe { match_into_unchecked!(&mut self.points, Cow::Owned(vec) => vec) }
+    }
+
+    pub fn set_resolution(&mut self, resolution: u32) {
+        self.needs_rebuild = true;
+        self.resolution = resolution;
+    }
+
+    pub fn resolution(&self) -> u32 {
+        self.resolution
+    }
+
+    pub fn set_color0(&mut self, color0: Color) {
+        self.color0 = color0;
+    }
+
+    pub fn color0(&self) -> Color {
+        self.color0
+    }
+
+    pub fn set_color1(&mut self, color1: Color) {
+        self.color1 = color1;
+    }
+
+    pub fn color1(&self) -> Color {
+        self.color1
+    }
+
+    fn rebuild_mesh_if_needed(&mut self) {
+        if !self.needs_rebuild {
+            return;
+        }
+        self.needs_rebuild = false;
+        self.path.clear();
+        if self.points().is_empty() {
+            return;
+        }
+        let context = self.context();
+        let mut path = mem::replace(&mut self.path, Path::new(context));
+        for points in self.points().array_chunks::<4>() {
+            for t in (0..=self.resolution()).map(|i| i as f32 / self.resolution as f32) {
+                let point = bezier::bezier_cubic(*points, t);
+                let color = self.color0.lerp(self.color1, t);
+                path.push_point(point, color);
+            }
+        }
+        self.path = path;
+    }
+
+    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>) {
+        self.rebuild_mesh_if_needed();
+        self.path.draw(frame, position)
+    }
+
+    pub fn draw_mode(&self) -> PathDrawingMode {
+        self.path.draw_mode()
+    }
+
+    pub fn set_draw_mode(&mut self, draw_mode: PathDrawingMode) {
+        self.path.set_draw_mode(draw_mode)
+    }
+
+    pub fn context(&self) -> &'cx Context {
+        self.path.context()
+    }
+}
 
 #[derive(Debug)]
 pub struct BezierPath<'a, 'cx> {
@@ -102,9 +193,12 @@ impl<'a, 'cx> BezierPath<'a, 'cx> {
         }
         self.needs_rebuild = false;
         self.path.clear();
-        for t in (0..self.resolution).map(|i| i as f32 / self.resolution as f32) {
+        if self.points().is_empty() {
+            return;
+        }
+        for t in (0..=self.resolution).map(|i| i as f32 / self.resolution as f32) {
             let point = bezier::bezier(self.points(), t);
-            let color = lerp_color(self.color0, self.color1, t);
+            let color = self.color0.lerp(self.color1, t);
             self.path.push_point(point, color);
         }
     }
@@ -120,6 +214,10 @@ impl<'a, 'cx> BezierPath<'a, 'cx> {
 
     pub fn set_draw_mode(&mut self, draw_mode: PathDrawingMode) {
         self.path.set_draw_mode(draw_mode)
+    }
+
+    pub fn context(&self) -> &'cx Context {
+        self.path.context()
     }
 }
 

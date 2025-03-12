@@ -1,3 +1,4 @@
+#![feature(array_chunks)]
 #![allow(dead_code, linker_messages)]
 
 use context::Context;
@@ -25,7 +26,7 @@ fn main() {
     let event_loop = winit::event_loop::EventLoop::builder().build().unwrap();
 
     let (window, display) = glutin::SimpleWindowBuilder::new()
-        .with_title("Bezier Curve Demo")
+        .with_title("Bezier Spline Demo")
         .with_inner_size(800, 480)
         .build(&event_loop);
     let scale_factor = window.scale_factor();
