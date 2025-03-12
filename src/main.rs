@@ -1,18 +1,21 @@
 #![allow(dead_code, linker_messages)]
 
+use context::Context;
 use glium::{backend::glutin, winit};
 
 pub mod application;
 pub mod bezier;
 pub mod color;
+pub mod context;
 pub mod input;
 pub mod mesh;
-pub mod shapes;
 pub mod resource;
+pub mod shapes;
+pub mod spline;
 pub mod text;
 pub mod utils;
 
-use application::{Application, Context};
+use application::Application;
 
 fn main() {
     unsafe {
@@ -31,7 +34,7 @@ fn main() {
         let _ = window.request_inner_size(winit::dpi::LogicalSize::new(800, 480));
     }
 
-    let context = Context::load(display);
+    let context = Context::new(display);
 
     let mut game = Application::new(&context, window);
     event_loop.run_app(&mut game).unwrap();

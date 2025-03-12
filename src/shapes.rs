@@ -1,11 +1,30 @@
+use std::{borrow::Cow, mem};
+
 use cgmath::*;
-use glium::Surface as _;
+use glium::{Surface as _, index::PrimitiveType};
 
 use crate::{
-    application::Context,
+    bezier,
     color::Color,
+    context::Context,
+    match_into_unchecked,
     mesh::{self, Mesh},
 };
+
+fn lerp_color(color0: Color, color1: Color, t: f32) -> Color {
+    Color::new(
+        color0.r * (1. - t) + color1.r * t,
+        color0.g * (1. - t) + color1.g * t,
+        color0.b * (1. - t) + color1.b * t,
+        color0.a * (1. - t) + color1.a * t,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathDrawingMode {
+    Line,
+    Fill,
+}
 
 /// Vertex used for `Rect` and `Path`s.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -17,14 +36,108 @@ pub(crate) struct ColoredVertex {
 glium::implement_vertex!(ColoredVertex, position, color);
 
 #[derive(Debug)]
+pub struct BezierPath<'a, 'cx> {
+    path: Path<'cx>,
+    points: Cow<'a, [Point2<f32>]>,
+    color0: Color,
+    color1: Color,
+    resolution: u32,
+    needs_rebuild: bool,
+}
+
+impl<'a, 'cx> BezierPath<'a, 'cx> {
+    pub fn new(context: &'cx Context) -> Self {
+        Self {
+            path: Path::new(context),
+            points: Cow::default(),
+            color0: Color::default(),
+            color1: Color::default(),
+            resolution: 100,
+            needs_rebuild: false,
+        }
+    }
+
+    pub fn points<'b>(&'b self) -> &'b [Point2<f32>]
+    where
+        'a: 'b,
+    {
+        &self.points
+    }
+
+    pub fn points_mut(&mut self) -> &mut Vec<Point2<f32>> {
+        self.needs_rebuild = true;
+        let points = mem::take(&mut self.points);
+        self.points = points.into_owned().into();
+        unsafe { match_into_unchecked!(&mut self.points, Cow::Owned(vec) => vec) }
+    }
+
+    pub fn set_resolution(&mut self, resolution: u32) {
+        self.needs_rebuild = true;
+        self.resolution = resolution;
+    }
+
+    pub fn resolution(&self) -> u32 {
+        self.resolution
+    }
+
+    pub fn set_color0(&mut self, color0: Color) {
+        self.color0 = color0;
+    }
+
+    pub fn color0(&self) -> Color {
+        self.color0
+    }
+
+    pub fn set_color1(&mut self, color1: Color) {
+        self.color1 = color1;
+    }
+
+    pub fn color1(&self) -> Color {
+        self.color1
+    }
+
+    fn rebuild_mesh_if_needed(&mut self) {
+        if !self.needs_rebuild {
+            return;
+        }
+        self.needs_rebuild = false;
+        self.path.clear();
+        for t in (0..self.resolution).map(|i| i as f32 / self.resolution as f32) {
+            let point = bezier::bezier(self.points(), t);
+            let color = lerp_color(self.color0, self.color1, t);
+            self.path.push_point(point, color);
+        }
+    }
+
+    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>) {
+        self.rebuild_mesh_if_needed();
+        self.path.draw(frame, position)
+    }
+
+    pub fn draw_mode(&self) -> PathDrawingMode {
+        self.path.draw_mode()
+    }
+
+    pub fn set_draw_mode(&mut self, draw_mode: PathDrawingMode) {
+        self.path.set_draw_mode(draw_mode)
+    }
+}
+
+#[derive(Debug)]
 pub struct Path<'cx> {
-    mesh: Mesh<'cx, ColoredVertex, u32>,
+    mesh: Mesh<'cx, ColoredVertex>,
+    draw_mode: PathDrawingMode,
 }
 
 impl<'cx> Path<'cx> {
     pub fn new(context: &'cx Context) -> Self {
         Self {
-            mesh: Mesh::new(context),
+            mesh: {
+                let mut mesh = Mesh::new(context);
+                *mesh.primitive_type_mut() = PrimitiveType::LinesList;
+                mesh
+            },
+            draw_mode: PathDrawingMode::Line,
         }
     }
 
@@ -38,14 +151,26 @@ impl<'cx> Path<'cx> {
         self.mesh.context()
     }
 
+    pub fn draw_mode(&self) -> PathDrawingMode {
+        self.draw_mode
+    }
+
+    pub fn set_draw_mode(&mut self, draw_mode: PathDrawingMode) {
+        self.draw_mode = draw_mode;
+        *self.mesh.primitive_type_mut() = match draw_mode {
+            PathDrawingMode::Line => glium::index::PrimitiveType::LineStrip,
+            PathDrawingMode::Fill => glium::index::PrimitiveType::TriangleFan,
+        };
+    }
+
     pub fn push_point(&mut self, position: Point2<f32>, color: Color) {
         let (vertices, indices) = self.mesh.vertices_indices_mut();
-        let index = vertices.len();
+        let index = vertices.len() as u32;
         vertices.push(ColoredVertex {
             position: position.into(),
             color: color.into(),
         });
-        indices.push(index as u32);
+        indices.push(index);
     }
 
     pub fn n_points(&self) -> usize {
@@ -54,7 +179,11 @@ impl<'cx> Path<'cx> {
 
     pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>) {
         self.mesh.update_if_needed();
-        // dbg!(&self.mesh);
+        let (polygon_mode, line_width) = match self.draw_mode() {
+            _ if self.n_points() <= 1 => return,
+            PathDrawingMode::Line => (glium::PolygonMode::Line, Some(1.0f32)),
+            PathDrawingMode::Fill => (glium::PolygonMode::Fill, None),
+        };
         let (frame_width, frame_height) = frame.get_dimensions();
         let model_view = Matrix4::from_translation(Vector3::new(position.x, position.y, 0.));
         let projection = cgmath::ortho(0., frame_width as f32, frame_height as f32, 0., -1., 1.);
@@ -66,7 +195,8 @@ impl<'cx> Path<'cx> {
             },
             &self.context().shader_rect,
             &glium::DrawParameters {
-                polygon_mode: glium::PolygonMode::Line,
+                polygon_mode,
+                line_width,
                 backface_culling: glium::BackfaceCullingMode::CullingDisabled,
                 ..mesh::default_2d_draw_parameters()
             },

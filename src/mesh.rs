@@ -1,12 +1,15 @@
 //! Utilities for drawing.
 
-use std::{fmt::{self, Debug}, ops::Add};
+use std::{
+    fmt::{self, Debug},
+    ops::Add,
+};
 
 use glium::Surface as _;
 
 use cgmath::*;
 
-use crate::{application::Context, utils::MainThreadOnly};
+use crate::{context::Context, utils::MainThreadOnly};
 
 pub fn matrix4_to_array<T>(matrix: Matrix4<T>) -> [[T; 4]; 4] {
     matrix.into()
@@ -78,10 +81,11 @@ pub struct Mesh<'cx, V: Copy + glium::Vertex, I: Copy + glium::index::Index = u3
     /// Whether the GL vertex and index buffer reflects the up-to-date content of the vertices/indices.
     /// `true` for not updated.
     needs_update: bool,
+    primitive_type: glium::index::PrimitiveType,
 }
 
-impl<V: Copy + glium::Vertex + Debug, I: Copy + glium::index::Index + Debug>
-    Debug for Mesh<'_, V, I>
+impl<V: Copy + glium::Vertex + Debug, I: Copy + glium::index::Index + Debug> Debug
+    for Mesh<'_, V, I>
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("SharedMesh")
@@ -100,6 +104,7 @@ impl<'cx, V: Copy + glium::Vertex, I: Copy + glium::index::Index> Mesh<'cx, V, I
             index_buffer: MainThreadOnly::new(None),
             vertices: Vec::new(),
             indices: Vec::new(),
+            primitive_type: glium::index::PrimitiveType::TrianglesList,
             needs_update: false,
         }
     }
@@ -143,6 +148,7 @@ impl<'cx, V: Copy + glium::Vertex, I: Copy + glium::index::Index> Mesh<'cx, V, I
             return;
         }
         self.needs_update = false;
+        let primitive_type = self.primitive_type();
         let vertex_buffer = self.vertex_buffer.get_mut();
         let index_buffer = self.index_buffer.get_mut();
         if self.vertices.is_empty() || self.indices.is_empty() {
@@ -154,12 +160,8 @@ impl<'cx, V: Copy + glium::Vertex, I: Copy + glium::index::Index> Mesh<'cx, V, I
             glium::VertexBuffer::dynamic(&self.context.display, &self.vertices).unwrap(),
         ));
         *index_buffer = Some(Box::new(
-            glium::IndexBuffer::dynamic(
-                &self.context.display,
-                glium::index::PrimitiveType::TrianglesList,
-                &self.indices,
-            )
-            .unwrap(),
+            glium::IndexBuffer::dynamic(&self.context.display, primitive_type, &self.indices)
+                .unwrap(),
         ));
     }
 
@@ -190,5 +192,13 @@ impl<'cx, V: Copy + glium::Vertex, I: Copy + glium::index::Index> Mesh<'cx, V, I
 
     pub fn context(&self) -> &'cx Context {
         self.context
+    }
+
+    pub fn primitive_type(&self) -> glium::index::PrimitiveType {
+        self.primitive_type
+    }
+
+    pub fn primitive_type_mut(&mut self) -> &mut glium::index::PrimitiveType {
+        &mut self.primitive_type
     }
 }

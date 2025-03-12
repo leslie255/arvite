@@ -25,3 +25,16 @@ pub fn bezier(ps: &[Point2<f32>], t: f32) -> Point2<f32> {
     }
     result
 }
+
+pub fn bezier3(
+    p0: Point2<f32>,
+    p1: Point2<f32>,
+    p2: Point2<f32>,
+    p3: Point2<f32>,
+    t: f32,
+) -> Point2<f32> {
+    (-t.powi(3) + 3. * t.powi(2) + 3. * t + 1.) * p0
+        + (3. * t.powi(3) - 6. * t.powi(2) + 3. * t) * p1.to_vec()
+        + (-3. * t.powi(3) + 3. * t.powi(2)) * p2.to_vec()
+        + (t.powi(3)) * p3.to_vec()
+}

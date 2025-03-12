@@ -10,87 +10,12 @@ use glium::{
 };
 
 use crate::{
-    bezier,
     color::Color,
+    context::Context,
     input::InputHelper,
-    resource::ResourceLoader,
-    shapes::{Circle, Path, Rect},
-    text::{AtlasFont, Line},
+    shapes::{BezierPath, Circle},
+    text::Line,
 };
-
-pub trait GliumBackend: glium::backend::Facade + Surface {}
-
-impl<T: glium::backend::Facade + Surface + ?Sized> GliumBackend for T {}
-
-#[derive(Debug)]
-pub struct Context {
-    pub(crate) loader: ResourceLoader,
-    pub(crate) shader_text: glium::Program,
-    pub(crate) shader_rect: glium::Program,
-    pub(crate) shader_circle: glium::Program,
-    pub(crate) font: AtlasFont,
-    pub(crate) display: glium::Display<glium::glutin::surface::WindowSurface>,
-}
-
-impl Context {
-    pub fn load(display: glium::Display<glium::glutin::surface::WindowSurface>) -> Self {
-        let loader = ResourceLoader::with_default_res_directory().unwrap();
-        Self {
-            shader_text: Self::load_shader(&display, &loader, "shader/text"),
-            shader_rect: Self::load_shader(&display, &loader, "shader/rect"),
-            shader_circle: Self::load_shader(&display, &loader, "shader/circle"),
-            font: Self::load_font(&display, &loader, "font/big_blue_terminal.json"),
-            loader,
-            display,
-        }
-    }
-
-    fn load_texture(
-        display: &impl glium::backend::Facade,
-        resource_loader: &ResourceLoader,
-        name: &str,
-    ) -> glium::Texture2d {
-        let image = resource_loader.load_image(name);
-        let image = glium::texture::RawImage2d::from_raw_rgba(
-            image.to_rgba8().into_raw(),
-            (image.width(), image.height()),
-        );
-        glium::Texture2d::new(display, image).unwrap()
-    }
-
-    /// `name` is in the format of `"shader/name"`, which would load `"res/shader/name.vs"` and `"res/shader/name.fs"`.
-    fn load_shader(
-        display: &impl glium::backend::Facade,
-        resource_loader: &ResourceLoader,
-        name: &str,
-    ) -> glium::Program {
-        let vs_source = resource_loader.read_to_string(format!("{name}.vs"));
-        let fs_source = resource_loader.read_to_string(format!("{name}.fs"));
-        glium::Program::from_source(display, &vs_source, &fs_source, None).unwrap()
-    }
-
-    fn load_font(
-        display: &impl glium::backend::Facade,
-        resource_loader: &ResourceLoader,
-        name: &str,
-    ) -> AtlasFont {
-        let mut font = AtlasFont::load_from_path(resource_loader, name);
-        let image = glium::texture::RawImage2d::from_raw_rgba(
-            font.atlas().to_rgba8().into_raw(),
-            (font.atlas().width(), font.atlas().height()),
-        );
-        font.gl_texture = Some(glium::Texture2d::new(display, image).unwrap());
-        font
-    }
-
-    fn resize(&self, new_size: Vector2<u32>) {
-        self.display.resize(new_size.into());
-    }
-
-    pub fn display_size(&self) -> Vector2<f32> {
-        Vector2::from(self.display.get_framebuffer_dimensions()).map(|x| x as f32)
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct FpsCounter {
@@ -147,8 +72,7 @@ pub struct Application<'cx> {
     input_helper: InputHelper,
     fps_counter: FpsCounter,
     text: Line<'static, 'cx>,
-    points: Rect<'cx>,
-    path: Path<'cx>,
+    bezier_path: BezierPath<'static, 'cx>,
     fix_point_circles: Circle<'cx>,
     epoch: Instant,
     context: &'cx Context,
@@ -170,12 +94,13 @@ impl<'cx> Application<'cx> {
                 line.set_font_size(20. * scale_factor);
                 line
             },
-            points: {
-                let mut rect = Rect::new(context);
-                rect.set_size(scale_factor * vec2(4., 4.));
-                rect
+            bezier_path: {
+                let mut bezier_path = BezierPath::new(context);
+                bezier_path.set_draw_mode(crate::shapes::PathDrawingMode::Fill);
+                bezier_path.set_color0(Color::new(1., 0., 1., 1.));
+                bezier_path.set_color1(Color::new(0., 1., 1., 1.));
+                bezier_path
             },
-            path: Path::new(context),
             fix_point_circles: {
                 let mut circle = Circle::new(context);
                 circle.set_outer_radius(scale_factor * 10.);
@@ -190,32 +115,15 @@ impl<'cx> Application<'cx> {
 
     fn draw(&mut self) {
         let mut frame = self.context.display.draw();
-        let frame_size = Vector2::from(frame.get_dimensions()).map(|x| x as f32);
 
         self.clear_frame(&mut frame);
 
-        let ps = &[
-            point2(100., frame_size.y / 2.),
-            point2(frame_size.x - 100., 100.),
-            point2(frame_size.x / 2., frame_size.y / 2. + 200.),
-            point2(frame_size.x - 100., frame_size.y - 200.),
-            point2(100., frame_size.y / 2.),
-            point2(frame_size.x - 100., 100.),
-        ];
-
-        for p in ps {
-            self.fix_point_circles.draw(&mut frame, p - vec2(10., 10.));
+        for point in self.bezier_path.points() {
+            self.fix_point_circles
+                .draw(&mut frame, point - vec2(10., 10.));
         }
 
-        if self.path.n_points() == 0 {
-            for t in (0..2000).map(|i| i as f32 / 2000.) {
-                let point = bezier::bezier(ps, t);
-                let color = Color::new(1. - t, 1., t, 1.);
-                self.path.push_point(point, color);
-            }
-        }
-
-        self.path.draw(&mut frame, point2(0., 0.));
+        self.bezier_path.draw(&mut frame, point2(0., 0.));
 
         self.text.draw(&mut frame, point2(10., 10.));
 
@@ -241,6 +149,18 @@ impl<'cx> Application<'cx> {
 
     #[allow(unused_variables)]
     fn cursor_moved(&mut self, delta: Vector2<f32>) {}
+
+    fn resized(&mut self, frame_size: Vector2<f32>) {
+        let points = self.bezier_path.points_mut();
+        points.clear();
+        points.extend_from_slice(&[
+            point2(100., frame_size.y / 2.),
+            point2(frame_size.x - 100., frame_size.y - 200.),
+            point2(frame_size.x / 2. + 200., 200.),
+            point2(frame_size.x / 2., frame_size.y / 2. + 200.),
+            point2(frame_size.x - 100., 100.),
+        ]);
+    }
 }
 
 impl winit::application::ApplicationHandler for Application<'_> {
@@ -265,10 +185,10 @@ impl winit::application::ApplicationHandler for Application<'_> {
                 self.window.request_redraw();
             }
             winit::event::WindowEvent::Resized(window_size) => {
-                self.context
-                    .resize(Vector2::new(window_size.width, window_size.height));
+                let window_size = Vector2::new(window_size.width, window_size.height);
+                self.context.resize(window_size);
+                self.resized(self.context.display_size());
                 self.window.request_redraw();
-                self.path.clear();
             }
             winit::event::WindowEvent::KeyboardInput {
                 device_id: _,

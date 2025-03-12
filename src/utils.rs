@@ -6,6 +6,26 @@ use std::{
 
 use cgmath::*;
 
+#[macro_export]
+macro_rules! match_into {
+    ($expr0:expr, $pat:pat => $expr1:expr $(,)?) => {
+        match $expr0 {
+            $pat => Some($expr1),
+            _ => None,
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! match_into_unchecked {
+    ($expr0:expr, $pat:pat => $expr1:expr $(,)?) => {
+        match $expr0 {
+            $pat => $expr1,
+            _ => std::hint::unreachable_unchecked(),
+        }
+    }
+}
+
 pub trait BoolToggle {
     fn toggle(&mut self);
 }

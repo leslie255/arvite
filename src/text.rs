@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use cgmath::*;
 
 use crate::{
-    application::Context,
+    context::Context,
     color::Color,
     mesh::{self, Mesh, Quad2},
     resource::ResourceLoader,
