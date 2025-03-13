@@ -1,9 +1,5 @@
 use cgmath::*;
 
-pub fn lerp2(p0: Point2<f32>, p1: Point2<f32>, t: f32) -> Point2<f32> {
-    Point2::add_element_wise((1. - t) * p0, t * p1)
-}
-
 pub fn bezier(ps: &[Point2<f32>], t: f32) -> Point2<f32> {
     let n = ps.len() - 1;
     let n_f = n as f32;

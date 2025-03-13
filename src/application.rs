@@ -17,6 +17,26 @@ use crate::{
     text::Line,
 };
 
+#[allow(clippy::excessive_precision)]
+const HEART_SHAPE: [Point2<f32>; 16] = [
+    point2(209.682922, 441.830322),
+    point2(209.682922, 441.830322),
+    point2(512.784424, 235.796143),
+    point2(391.867676, 72.83374),
+    point2(391.867676, 72.83374),
+    point2(277.502899, -81.298584),
+    point2(250.148407, 188.090942),
+    point2(175.742783, 84.677979),
+    point2(175.742783, 84.677979),
+    point2(114.818741, 0.002441),
+    point2(65.932556, 37.512939),
+    point2(32.682919, 95.830322),
+    point2(32.682919, 95.830322),
+    point2(-23.292421, 194.006958),
+    point2(209.682922, 441.830322),
+    point2(209.682922, 441.830322),
+];
+
 #[derive(Debug, Clone, Copy)]
 pub struct FpsCounter {
     /// Sets the update interval.
@@ -67,12 +87,14 @@ impl Default for FpsCounter {
 
 #[derive(Debug)]
 pub struct Application<'cx> {
+    context: &'cx Context,
     window: winit::window::Window,
     last_window_event: Instant,
     input_helper: InputHelper,
     fps_counter: FpsCounter,
     epoch: Instant,
-    context: &'cx Context,
+    selected_point: Option<usize>,
+    spline_position: Point2<f32>,
     text: Line<'static, 'cx>,
     spline: BezierSplinePath<'static, 'cx>,
     fix_point_circles: Circle<'cx>,
@@ -87,6 +109,8 @@ impl<'cx> Application<'cx> {
             input_helper: InputHelper::new(),
             fps_counter: FpsCounter::new(),
             last_window_event: Instant::now(),
+            selected_point: None,
+            spline_position: point2(200., 200.),
             text: {
                 let mut line = Line::new(context);
                 line.set_string("FPS : ---.---".into());
@@ -99,8 +123,8 @@ impl<'cx> Application<'cx> {
                 let mut spline = BezierSplinePath::new(context);
                 spline.set_resolution(64);
                 spline.set_draw_mode(PathDrawingMode::Line);
-                spline.set_color0(Color::new(1., 1., 0., 1.));
-                spline.set_color1(Color::new(1., 0., 1., 1.));
+                spline.set_color(Color::new(1., 0.4, 0.5, 1.));
+                spline.points_mut().extend_from_slice(&HEART_SHAPE);
                 spline
             },
             fix_point_circles: {
@@ -125,13 +149,20 @@ impl<'cx> Application<'cx> {
 
         self.clear_frame(&mut frame);
 
-        let position = point2::<f32>(200., 200.);
+        self.spline.draw(&mut frame, self.spline_position);
 
         // Knots / control points.
-        for &point in self.spline.points() {
+        for (i, &point) in self.spline.points().iter().enumerate() {
             let r = self.fix_point_circles.outer_radius();
-            self.fix_point_circles
-                .draw(&mut frame, point + position.to_vec() - vec2(r / 2., r / 2.));
+            let inner_radius = match self.selected_point {
+                Some(selected) if i == selected => 0.0f32,
+                _ => r - 1.,
+            };
+            self.fix_point_circles.set_inner_radius(inner_radius);
+            self.fix_point_circles.draw(
+                &mut frame,
+                point + self.spline_position.to_vec() - vec2(r, r),
+            );
             self.fix_point_circles
                 .uniform_fill(Color::new(1., 1., 1., 1.));
         }
@@ -142,10 +173,8 @@ impl<'cx> Application<'cx> {
                 .push_point(point0, Color::new(0.5, 0.5, 0.5, 1.));
             self.control_lines
                 .push_point(point1, Color::new(0.5, 0.5, 0.5, 1.));
-            self.control_lines.draw(&mut frame, position);
+            self.control_lines.draw(&mut frame, self.spline_position);
         }
-        // The spline.
-        self.spline.draw(&mut frame, position);
 
         self.text.draw(&mut frame, point2(10., 10.));
 
@@ -169,40 +198,54 @@ impl<'cx> Application<'cx> {
     #[allow(unused_variables)]
     fn key_up(&mut self, key_code: KeyCode) {}
 
-    #[allow(unused_variables)]
-    fn cursor_moved(&mut self, delta: Vector2<f32>) {}
-
-    #[allow(unused_variables)]
-    fn resized(&mut self, frame_size: Vector2<f32>) {
-        let scale_factor = self.window.scale_factor() as f32;
-        // M 209.682922 441.830322
-        // C 209.682922 441.830322 512.784424 235.796143 391.867676 72.83374
-        // C 277.502899 -81.298584 250.148407 188.090942 175.742783 84.677979
-        // C 114.818741 0.002441 65.932556 37.512939 32.682919 95.830322
-        // C -23.292421 194.006958 209.682922 441.830322 209.682922 441.830322 Z
-        let points = self.spline.points_mut();
-        if points.is_empty() {
-            #[allow(clippy::excessive_precision)]
-            points.extend_from_slice(&[
-                point2(209.682922, 441.830322),
-                point2(209.682922, 441.830322),
-                point2(512.784424, 235.796143),
-                point2(391.867676, 72.83374),
-                point2(391.867676, 72.83374),
-                point2(277.502899, -81.298584),
-                point2(250.148407, 188.090942),
-                point2(175.742783, 84.677979),
-                point2(175.742783, 84.677979),
-                point2(114.818741, 0.002441),
-                point2(65.932556, 37.512939),
-                point2(32.682919, 95.830322),
-                point2(32.682919, 95.830322),
-                point2(-23.292421, 194.006958),
-                point2(209.682922, 441.830322),
-                point2(209.682922, 441.830322),
-            ]);
+    fn mouse_down(&mut self, button: u32) {
+        let Some(location) = self.input_helper.cursor_position_physical() else {
+            return;
+        };
+        if button == 0 {
+            let previous_selected_point = self.selected_point;
+            self.selected_point = None;
+            for (i, point) in self.spline.points().iter().enumerate() {
+                let allowed_distance = if previous_selected_point.is_some_and(|prev| prev == i) {
+                    self.fix_point_circles.outer_radius() * 2.
+                } else {
+                    self.fix_point_circles.outer_radius()
+                };
+                let distance = location.distance(*point + self.spline_position.to_vec());
+                if distance <= allowed_distance {
+                    self.selected_point = Some(i);
+                }
+            }
+        } else if button == 1 {
+            if let Some(i_select) = self.selected_point {
+                let selected_point = self.spline.points()[i_select];
+                let distance = location.distance(selected_point + self.spline_position.to_vec());
+                if distance > self.fix_point_circles.outer_radius() * 2. {
+                    self.selected_point = None;
+                }
+            }
         }
     }
+
+    #[allow(unused_variables)]
+    fn mouse_up(&mut self, button: u32) {}
+
+    #[allow(unused_variables)]
+    fn cursor_moved(&mut self, delta: Vector2<f32>) {
+        if self.input_helper.button_is_pressed(0) {
+            let Some(location) = self.input_helper.cursor_position_physical() else {
+                return;
+            };
+            let Some(i_selected) = self.selected_point else {
+                return;
+            };
+            let point = &mut self.spline.points_mut()[i_selected];
+            *point = location - self.spline_position.to_vec();
+        }
+    }
+
+    #[allow(unused_variables)]
+    fn resized(&mut self, frame_size: Vector2<f32>) {}
 }
 
 impl winit::application::ApplicationHandler for Application<'_> {
@@ -237,7 +280,7 @@ impl winit::application::ApplicationHandler for Application<'_> {
                 event,
                 is_synthetic: _,
             } => {
-                self.input_helper.update_key_event(&event);
+                self.input_helper.notify_key_event(&event);
                 match event.physical_key {
                     PhysicalKey::Code(key_code) => {
                         if event.state.is_pressed() {
@@ -248,6 +291,19 @@ impl winit::application::ApplicationHandler for Application<'_> {
                     }
                     PhysicalKey::Unidentified(_) => (),
                 }
+            }
+            winit::event::WindowEvent::CursorMoved {
+                device_id: _,
+                position,
+            } => {
+                self.input_helper
+                    .notify_cursor_moved(position, self.window.scale_factor());
+            }
+            winit::event::WindowEvent::CursorLeft { device_id: _ } => {
+                self.input_helper.notify_cursor_left();
+            }
+            winit::event::WindowEvent::CursorEntered { device_id: _ } => {
+                self.input_helper.notify_cursor_entered();
             }
             _ => (),
         }
@@ -261,14 +317,16 @@ impl winit::application::ApplicationHandler for Application<'_> {
     ) {
         match event {
             winit::event::DeviceEvent::MouseMotion { delta } => {
-                self.cursor_moved(Vector2::new(delta.0 as f32, delta.1 as f32));
+                self.cursor_moved(Vector2::from(delta).map(|f| f as f32));
             }
             winit::event::DeviceEvent::MouseWheel { delta: _ } => (),
-            winit::event::DeviceEvent::Motion { axis: _, value: _ } => (),
-            winit::event::DeviceEvent::Button {
-                button: _,
-                state: _,
-            } => (),
+            winit::event::DeviceEvent::Button { button, state } => {
+                self.input_helper.notify_button_event(button, state);
+                match state {
+                    winit::event::ElementState::Pressed => self.mouse_down(button),
+                    winit::event::ElementState::Released => self.mouse_up(button),
+                }
+            }
             _ => (),
         }
     }

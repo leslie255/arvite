@@ -30,8 +30,7 @@ glium::implement_vertex!(ColoredVertex, position, color);
 pub struct BezierSplinePath<'a, 'cx> {
     path: Path<'cx>,
     points: Cow<'a, [Point2<f32>]>,
-    color0: Color,
-    color1: Color,
+    color: Color,
     resolution: u32,
     needs_rebuild: bool,
 }
@@ -41,8 +40,7 @@ impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
         Self {
             path: Path::new(context),
             points: Cow::default(),
-            color0: Color::default(),
-            color1: Color::default(),
+            color: Color::default(),
             resolution: 48,
             needs_rebuild: false,
         }
@@ -71,20 +69,12 @@ impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
         self.resolution
     }
 
-    pub fn set_color0(&mut self, color0: Color) {
-        self.color0 = color0;
+    pub fn set_color(&mut self, color: Color) {
+        self.color = color;
     }
 
-    pub fn color0(&self) -> Color {
-        self.color0
-    }
-
-    pub fn set_color1(&mut self, color1: Color) {
-        self.color1 = color1;
-    }
-
-    pub fn color1(&self) -> Color {
-        self.color1
+    pub fn color(&self) -> Color {
+        self.color
     }
 
     fn rebuild_mesh_if_needed(&mut self) {
@@ -101,7 +91,7 @@ impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
         for points in self.points().array_chunks::<4>() {
             for t in (0..=self.resolution()).map(|i| i as f32 / self.resolution as f32) {
                 let point = bezier::bezier_cubic(*points, t);
-                let color = self.color0.lerp(self.color1, t);
+                let color = self.color.lerp(self.color, t);
                 path.push_point(point, color);
             }
         }

@@ -1,14 +1,27 @@
-use glium::winit::{event::KeyEvent, keyboard::{KeyCode, PhysicalKey}};
+use cgmath::*;
+
+use glium::winit::{
+    dpi::{LogicalPosition, PhysicalPosition},
+    event::KeyEvent,
+    keyboard::{KeyCode, PhysicalKey},
+};
 
 /// Keeps track of which keys are currently down.
 #[derive(Debug, Clone)]
 pub struct InputHelper {
     downed_keys: Vec<bool>,
+    cursor_position_physical: Option<PhysicalPosition<f64>>,
+    cursor_position_logical: Option<LogicalPosition<f64>>,
+    downed_buttons: Vec<bool>,
 }
+
 impl InputHelper {
     pub fn new() -> Self {
         Self {
             downed_keys: vec![false; 256],
+            cursor_position_physical: None,
+            cursor_position_logical: None,
+            downed_buttons: vec![false; 64],
         }
     }
 
@@ -21,7 +34,21 @@ impl InputHelper {
         self.downed_keys[Self::index_for_key(key_code)]
     }
 
-    pub fn update_key_event(&mut self, key_event: &KeyEvent) {
+    pub fn button_is_pressed(&self, button: u32) -> bool {
+        self.downed_buttons[button as usize]
+    }
+
+    pub fn cursor_position_physical(&mut self) -> Option<Point2<f32>> {
+        self.cursor_position_physical
+            .map(|p| point2(p.x as f32, p.y as f32))
+    }
+
+    pub fn cursor_position_logical(&mut self) -> Option<Point2<f32>> {
+        self.cursor_position_logical
+            .map(|p| point2(p.x as f32, p.y as f32))
+    }
+
+    pub fn notify_key_event(&mut self, key_event: &KeyEvent) {
         if key_event.repeat {
             return;
         }
@@ -32,6 +59,22 @@ impl InputHelper {
         let index = Self::index_for_key(key_code);
         self.downed_keys[index] = key_event.state.is_pressed();
     }
+
+    pub fn notify_cursor_moved(&mut self, position: PhysicalPosition<f64>, scale_factor: f64) {
+        self.cursor_position_physical = Some(position);
+        self.cursor_position_logical = Some(position.to_logical(scale_factor));
+    }
+
+    pub fn notify_cursor_left(&mut self) {
+        self.cursor_position_physical = None;
+        self.cursor_position_logical = None;
+    }
+
+    pub fn notify_cursor_entered(&mut self) {}
+
+    pub fn notify_button_event(&mut self, button: u32, state: glium::winit::event::ElementState) {
+        self.downed_buttons[button as usize] = state.is_pressed();
+    }
 }
 
 impl Default for InputHelper {
@@ -39,5 +82,3 @@ impl Default for InputHelper {
         Self::new()
     }
 }
-
-

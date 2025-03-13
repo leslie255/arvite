@@ -12,7 +12,6 @@ pub mod input;
 pub mod mesh;
 pub mod resource;
 pub mod shapes;
-pub mod spline;
 pub mod text;
 pub mod utils;
 
