@@ -29,7 +29,7 @@ glium::implement_vertex!(ColoredVertex, position, color);
 #[derive(Debug)]
 pub struct BezierSplinePath<'a, 'cx> {
     path: Path<'cx>,
-    points: Cow<'a, [Point2<f32>]>,
+    points: Cow<'a, [[Point2<f32>; 3]]>,
     color: Color,
     resolution: u32,
     needs_rebuild: bool,
@@ -46,14 +46,14 @@ impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
         }
     }
 
-    pub fn points<'b>(&'b self) -> &'b [Point2<f32>]
+    pub fn segments<'b>(&'b self) -> &'b [[Point2<f32>; 3]]
     where
         'a: 'b,
     {
         &self.points
     }
 
-    pub fn points_mut(&mut self) -> &mut Vec<Point2<f32>> {
+    pub fn segments_mut(&mut self) -> &mut Vec<[Point2<f32>; 3]> {
         self.needs_rebuild = true;
         let points = mem::take(&mut self.points);
         self.points = points.into_owned().into();
@@ -83,16 +83,22 @@ impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
         }
         self.needs_rebuild = false;
         self.path.clear();
-        if self.points().is_empty() {
+        if self.segments().len() <= 1 {
             return;
         }
         let context = self.context();
         let mut path = mem::replace(&mut self.path, Path::new(context));
-        for points in self.points().array_chunks::<4>() {
+        if self.segments().len() <= 1 {
+            return;
+        }
+        for (i, segment) in self.segments().iter().enumerate() {
+            let next_segment = match self.segments().get(i + 1) {
+                Some(xs) => xs,
+                None => &self.segments()[0],
+            };
+            let points = [segment[1], segment[2], next_segment[0], next_segment[1]];
             for t in (0..=self.resolution()).map(|i| i as f32 / self.resolution as f32) {
-                let point = bezier::bezier_cubic(*points, t);
-                let color = self.color.lerp(self.color, t);
-                path.push_point(point, color);
+                path.push_point(bezier::bezier_cubic(points, t), self.color);
             }
         }
         self.path = path;

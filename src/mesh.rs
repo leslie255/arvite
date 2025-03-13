@@ -199,6 +199,7 @@ impl<'cx, V: Copy + glium::Vertex, I: Copy + glium::index::Index> Mesh<'cx, V, I
     }
 
     pub fn primitive_type_mut(&mut self) -> &mut glium::index::PrimitiveType {
+        self.needs_update = true;
         &mut self.primitive_type
     }
 }

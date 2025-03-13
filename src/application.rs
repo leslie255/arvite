@@ -18,23 +18,27 @@ use crate::{
 };
 
 #[allow(clippy::excessive_precision)]
-const HEART_SHAPE: [Point2<f32>; 16] = [
-    point2(209.682922, 441.830322),
-    point2(209.682922, 441.830322),
-    point2(512.784424, 235.796143),
-    point2(391.867676, 72.83374),
-    point2(391.867676, 72.83374),
-    point2(277.502899, -81.298584),
-    point2(250.148407, 188.090942),
-    point2(175.742783, 84.677979),
-    point2(175.742783, 84.677979),
-    point2(114.818741, 0.002441),
-    point2(65.932556, 37.512939),
-    point2(32.682919, 95.830322),
-    point2(32.682919, 95.830322),
-    point2(-23.292421, 194.006958),
-    point2(209.682922, 441.830322),
-    point2(209.682922, 441.830322),
+const BEZIER_SPLINE_SHAPE: &[[Point2<f32>; 3]] = &[
+    [
+        point2(131.20703, 426.07813),
+        point2(218.78906, 452.0625),
+        point2(296.6914, 435.08203),
+    ],
+    [
+        point2(440.8828, 240.86328),
+        point2(382.09766, 136.92188),
+        point2(331.60547, 47.69922),
+    ],
+    [
+        point2(247.67969, 71.640625),
+        point2(209.75, 121.703125),
+        point2(172.5625, 76.984375),
+    ],
+    [
+        point2(104.92969, 49.05078),
+        point2(46.15625, 136.41797),
+        point2(-2.9960938, 222.85156),
+    ],
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -93,7 +97,7 @@ pub struct Application<'cx> {
     input_helper: InputHelper,
     fps_counter: FpsCounter,
     epoch: Instant,
-    selected_point: Option<usize>,
+    selected_point: Option<(usize, usize)>,
     spline_position: Point2<f32>,
     text: Line<'static, 'cx>,
     spline: BezierSplinePath<'static, 'cx>,
@@ -124,7 +128,7 @@ impl<'cx> Application<'cx> {
                 spline.set_resolution(64);
                 spline.set_draw_mode(PathDrawingMode::Line);
                 spline.set_color(Color::new(1., 0.4, 0.5, 1.));
-                spline.points_mut().extend_from_slice(&HEART_SHAPE);
+                spline.segments_mut().extend_from_slice(BEZIER_SPLINE_SHAPE);
                 spline
             },
             fix_point_circles: {
@@ -152,27 +156,31 @@ impl<'cx> Application<'cx> {
         self.spline.draw(&mut frame, self.spline_position);
 
         // Knots / control points.
-        for (i, &point) in self.spline.points().iter().enumerate() {
-            let r = self.fix_point_circles.outer_radius();
-            let inner_radius = match self.selected_point {
-                Some(selected) if i == selected => 0.0f32,
-                _ => r - 1.,
-            };
-            self.fix_point_circles.set_inner_radius(inner_radius);
-            self.fix_point_circles.draw(
-                &mut frame,
-                point + self.spline_position.to_vec() - vec2(r, r),
-            );
-            self.fix_point_circles
-                .uniform_fill(Color::new(1., 1., 1., 1.));
+        for (i, segment) in self.spline.segments().iter().enumerate() {
+            for (j, point) in segment.iter().enumerate() {
+                let r = self.fix_point_circles.outer_radius();
+                let inner_radius = match self.selected_point {
+                    Some(selected) if (i, j) == selected => 0.0f32,
+                    _ => r - 1.,
+                };
+                self.fix_point_circles.set_inner_radius(inner_radius);
+                self.fix_point_circles.draw(
+                    &mut frame,
+                    point + self.spline_position.to_vec() - vec2(r, r),
+                );
+                self.fix_point_circles
+                    .uniform_fill(Color::new(1., 1., 1., 1.));
+            }
         }
         // Control lines.
-        for &[point0, point1] in self.spline.points().array_chunks::<2>() {
+        for &[point0, point1, point2] in self.spline.segments() {
             self.control_lines.clear();
             self.control_lines
                 .push_point(point0, Color::new(0.5, 0.5, 0.5, 1.));
             self.control_lines
                 .push_point(point1, Color::new(0.5, 0.5, 0.5, 1.));
+            self.control_lines
+                .push_point(point2, Color::new(0.5, 0.5, 0.5, 1.));
             self.control_lines.draw(&mut frame, self.spline_position);
         }
 
@@ -193,7 +201,14 @@ impl<'cx> Application<'cx> {
     fn before_window_event(&mut self, duration_since_last_window_event: Duration) {}
 
     #[allow(unused_variables)]
-    fn key_down(&mut self, key_code: KeyCode, _text: Option<&str>, is_repeat: bool) {}
+    fn key_down(&mut self, key_code: KeyCode, _text: Option<&str>, is_repeat: bool) {
+        if key_code == KeyCode::KeyP && !is_repeat {
+            println!("Shape:");
+            for (i, segement) in self.spline.segments().iter().enumerate() {
+                println!("segment_{i} : {segement:?}");
+            }
+        }
+    }
 
     #[allow(unused_variables)]
     fn key_up(&mut self, key_code: KeyCode) {}
@@ -205,24 +220,34 @@ impl<'cx> Application<'cx> {
         if button == 0 {
             let previous_selected_point = self.selected_point;
             self.selected_point = None;
-            for (i, point) in self.spline.points().iter().enumerate() {
-                let allowed_distance = if previous_selected_point.is_some_and(|prev| prev == i) {
-                    self.fix_point_circles.outer_radius() * 2.
-                } else {
-                    self.fix_point_circles.outer_radius()
-                };
-                let distance = location.distance(*point + self.spline_position.to_vec());
-                if distance <= allowed_distance {
-                    self.selected_point = Some(i);
+            for (i, segment) in self.spline.segments().iter().enumerate() {
+                for (j, point) in segment.iter().enumerate() {
+                    let point = *point + self.spline_position.to_vec();
+                    let allowed_distance =
+                        if previous_selected_point.is_some_and(|prev| prev == (i, j)) {
+                            self.fix_point_circles.outer_radius() * 2.
+                        } else {
+                            self.fix_point_circles.outer_radius()
+                        };
+                    let distance = location.distance(point);
+                    if distance <= allowed_distance {
+                        self.selected_point = Some((i, j));
+                    }
                 }
             }
         } else if button == 1 {
-            if let Some(i_select) = self.selected_point {
-                let selected_point = self.spline.points()[i_select];
+            if let Some(i_selected) = self.selected_point {
+                let selected_point = self.spline.segments()[i_selected.0][i_selected.1];
                 let distance = location.distance(selected_point + self.spline_position.to_vec());
                 if distance > self.fix_point_circles.outer_radius() * 2. {
                     self.selected_point = None;
                 }
+            } else {
+                let draw_mode = self.spline.draw_mode();
+                self.spline.set_draw_mode(match draw_mode {
+                    PathDrawingMode::Line => PathDrawingMode::Fill,
+                    PathDrawingMode::Fill => PathDrawingMode::Line,
+                });
             }
         }
     }
@@ -239,7 +264,7 @@ impl<'cx> Application<'cx> {
             let Some(i_selected) = self.selected_point else {
                 return;
             };
-            let point = &mut self.spline.points_mut()[i_selected];
+            let point = &mut self.spline.segments_mut()[i_selected.0][i_selected.1];
             *point = location - self.spline_position.to_vec();
         }
     }

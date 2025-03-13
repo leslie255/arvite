@@ -1,4 +1,4 @@
-#![feature(array_chunks)]
+#![feature(array_chunks, iter_array_chunks)]
 #![allow(dead_code, linker_messages)]
 
 use context::Context;
