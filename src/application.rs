@@ -157,23 +157,34 @@ impl<'cx> Application<'cx> {
 
         // Knots / control points.
         for (i, segment) in self.spline.segments().iter().enumerate() {
-            for (j, point) in segment.iter().enumerate() {
-                let r = self.fix_point_circles.outer_radius();
-                let inner_radius = match self.selected_point {
-                    Some(selected) if (i, j) == selected => 0.0f32,
-                    _ => r - 1.,
-                };
+            let is_selected = self
+                .selected_point
+                .is_some_and(|(i_selected, _)| i == i_selected);
+            let r = self.fix_point_circles.outer_radius();
+            if is_selected {
+                for (j, point) in segment.iter().enumerate() {
+                    let is_selected = self.selected_point.unwrap().1 == j;
+                    let inner_radius = if is_selected { 0.0f32 } else { r - 1. };
+                    self.fix_point_circles.set_inner_radius(inner_radius);
+                    self.fix_point_circles.draw(
+                        &mut frame,
+                        point + self.spline_position.to_vec() - vec2(r, r),
+                    );
+                }
+            } else {
+                let inner_radius = if is_selected { 0.0f32 } else { r - 1. };
                 self.fix_point_circles.set_inner_radius(inner_radius);
                 self.fix_point_circles.draw(
                     &mut frame,
-                    point + self.spline_position.to_vec() - vec2(r, r),
+                    segment[1] + self.spline_position.to_vec() - vec2(r, r),
                 );
-                self.fix_point_circles
-                    .uniform_fill(Color::new(1., 1., 1., 1.));
             }
         }
         // Control lines.
-        for &[point0, point1, point2] in self.spline.segments() {
+        if let Some(&[point0, point1, point2]) = self
+            .selected_point
+            .and_then(|i| self.spline.segments().get(i.0))
+        {
             self.control_lines.clear();
             self.control_lines
                 .push_point(point0, Color::new(0.5, 0.5, 0.5, 1.));
@@ -257,6 +268,7 @@ impl<'cx> Application<'cx> {
 
     #[allow(unused_variables)]
     fn cursor_moved(&mut self, delta: Vector2<f32>) {
+        let physical_delta = delta * self.window.scale_factor() as f32;
         if self.input_helper.button_is_pressed(0) {
             let Some(location) = self.input_helper.cursor_position_physical() else {
                 return;
@@ -264,8 +276,14 @@ impl<'cx> Application<'cx> {
             let Some(i_selected) = self.selected_point else {
                 return;
             };
-            let point = &mut self.spline.segments_mut()[i_selected.0][i_selected.1];
-            *point = location - self.spline_position.to_vec();
+            let segment = self.spline.segments_mut();
+            if i_selected.1 == 1 {
+                segment[i_selected.0][0] += physical_delta;
+                segment[i_selected.0][1] += physical_delta;
+                segment[i_selected.0][2] += physical_delta;
+            } else {
+                segment[i_selected.0][i_selected.1] += physical_delta;
+            }
         }
     }
 
