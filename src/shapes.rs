@@ -97,7 +97,14 @@ impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
                 None => &self.segments()[0],
             };
             let points = [segment[1], segment[2], next_segment[0], next_segment[1]];
-            for t in (0..=self.resolution()).map(|i| i as f32 / self.resolution as f32) {
+            if points[1] == points[0] && points[2] == points[3] {
+                // Special optimization for when having a segment of just straight lines.
+                path.push_point(points[0], self.color);
+                path.push_point(points[3], self.color);
+                continue;
+            }
+            let step_size = 1. / self.resolution() as f32;
+            for t in (0..=self.resolution()).map(|i| i as f32 * step_size) {
                 path.push_point(bezier::bezier_cubic(points, t), self.color);
             }
         }

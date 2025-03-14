@@ -19,26 +19,10 @@ use crate::{
 
 #[allow(clippy::excessive_precision)]
 const BEZIER_SPLINE_SHAPE: &[[Point2<f32>; 3]] = &[
-    [
-        point2(131.20703, 426.07813),
-        point2(218.78906, 452.0625),
-        point2(296.6914, 435.08203),
-    ],
-    [
-        point2(440.8828, 240.86328),
-        point2(382.09766, 136.92188),
-        point2(331.60547, 47.69922),
-    ],
-    [
-        point2(247.67969, 71.640625),
-        point2(209.75, 121.703125),
-        point2(172.5625, 76.984375),
-    ],
-    [
-        point2(104.92969, 49.05078),
-        point2(46.15625, 136.41797),
-        point2(-2.9960938, 222.85156),
-    ],
+    [point2(131., 452.), point2(218., 452.), point2(296., 452.)],
+    [point2(440., 240.), point2(382., 136.), point2(331., 47.)],
+    [point2(247., 71.), point2(209., 121.), point2(172., 76.)],
+    [point2(104., 49.), point2(46., 136.), point2(0., 222.)],
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -89,6 +73,17 @@ impl Default for FpsCounter {
     }
 }
 
+/// Whether to show the control elements for the bezier spline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlElementsMode {
+    /// Always show all control points and lines.
+    All,
+    /// Only show the center points for most segments.
+    Minimal,
+    /// No control elements.
+    None,
+}
+
 #[derive(Debug)]
 pub struct Application<'cx> {
     context: &'cx Context,
@@ -97,9 +92,11 @@ pub struct Application<'cx> {
     input_helper: InputHelper,
     fps_counter: FpsCounter,
     epoch: Instant,
+    control_elements_mode: ControlElementsMode,
     selected_point: Option<(usize, usize)>,
     spline_position: Point2<f32>,
-    text: Line<'static, 'cx>,
+    fps_text: Line<'static, 'cx>,
+    position_text: Line<'static, 'cx>,
     spline: BezierSplinePath<'static, 'cx>,
     fix_point_circles: Circle<'cx>,
     control_lines: Path<'cx>,
@@ -115,12 +112,21 @@ impl<'cx> Application<'cx> {
             last_window_event: Instant::now(),
             selected_point: None,
             spline_position: point2(200., 200.),
-            text: {
+            epoch: Instant::now(),
+            control_elements_mode: ControlElementsMode::Minimal,
+            fps_text: {
                 let mut line = Line::new(context);
                 line.set_string("FPS : ---.---".into());
                 line.set_fg_color(Color::new(1., 1., 1., 0.7));
                 line.set_bg_color(Color::new(0.5, 0.5, 0.5, 0.5));
                 line.set_font_size(20. * scale_factor);
+                line
+            },
+            position_text: {
+                let mut line = Line::new(context);
+                line.set_fg_color(Color::new(1., 1., 1., 0.7));
+                line.set_bg_color(Color::new(0.5, 0.5, 0.5, 0.5));
+                line.set_font_size(12. * scale_factor);
                 line
             },
             spline: {
@@ -143,7 +149,6 @@ impl<'cx> Application<'cx> {
                 path.set_draw_mode(PathDrawingMode::Line);
                 path
             },
-            epoch: Instant::now(),
             context,
         }
     }
@@ -156,51 +161,67 @@ impl<'cx> Application<'cx> {
         self.spline.draw(&mut frame, self.spline_position);
 
         // Knots / control points.
-        for (i, segment) in self.spline.segments().iter().enumerate() {
-            let is_selected = self
-                .selected_point
-                .is_some_and(|(i_selected, _)| i == i_selected);
-            let r = self.fix_point_circles.outer_radius();
-            if is_selected {
-                for (j, point) in segment.iter().enumerate() {
-                    let is_selected = self.selected_point.unwrap().1 == j;
-                    let inner_radius = if is_selected { 0.0f32 } else { r - 1. };
-                    self.fix_point_circles.set_inner_radius(inner_radius);
-                    self.fix_point_circles.draw(
-                        &mut frame,
-                        point + self.spline_position.to_vec() - vec2(r, r),
-                    );
-                }
-            } else {
-                let inner_radius = if is_selected { 0.0f32 } else { r - 1. };
-                self.fix_point_circles.set_inner_radius(inner_radius);
-                self.fix_point_circles.draw(
-                    &mut frame,
-                    segment[1] + self.spline_position.to_vec() - vec2(r, r),
-                );
+        if self.control_elements_mode != ControlElementsMode::None {
+            for i in 0..self.spline.segments().len() {
+                self.draw_controls_for_segment(&mut frame, i);
             }
         }
-        // Control lines.
-        if let Some(&[point0, point1, point2]) = self
+
+        // Position label.
+        if let Some(selected_point) = self
             .selected_point
-            .and_then(|i| self.spline.segments().get(i.0))
+            .and_then(|i| self.spline.segments().get(i.0).map(|segment| segment[i.1]))
         {
-            self.control_lines.clear();
-            self.control_lines
-                .push_point(point0, Color::new(0.5, 0.5, 0.5, 1.));
-            self.control_lines
-                .push_point(point1, Color::new(0.5, 0.5, 0.5, 1.));
-            self.control_lines
-                .push_point(point2, Color::new(0.5, 0.5, 0.5, 1.));
-            self.control_lines.draw(&mut frame, self.spline_position);
+            let scale_factor = self.window.scale_factor() as f32;
+            self.position_text
+                .set_string(format!("{:.3} {:.3}", selected_point.x, selected_point.y).into());
+            self.position_text.draw(
+                &mut frame,
+                selected_point + vec2(8., 8.) * scale_factor + self.spline_position.to_vec(),
+            );
         }
 
-        self.text.draw(&mut frame, point2(10., 10.));
+        self.fps_text.draw(&mut frame, point2(10., 10.));
 
         frame.finish().unwrap();
         if let Some(fps) = self.fps_counter.frame() {
-            self.text.set_string(format!("FPS: {fps:.3}").into());
+            self.fps_text.set_string(format!("FPS: {fps:.3}").into());
         }
+    }
+
+    fn draw_controls_for_segment(&mut self, frame: &mut glium::Frame, i: usize) {
+        let segment = self.spline.segments()[i];
+        let is_selected = self
+            .selected_point
+            .is_some_and(|(i_selected, _)| i == i_selected);
+        if is_selected || self.control_elements_mode == ControlElementsMode::All {
+            for (j, &point) in segment.iter().enumerate() {
+                let point_is_selected = self.selected_point.is_some_and(|ij| ij == (i, j));
+                self.draw_point(frame, point, point_is_selected);
+            }
+            self.draw_control_line(frame, segment);
+        } else {
+            self.draw_point(frame, segment[1], false);
+        }
+    }
+
+    fn draw_point(&mut self, frame: &mut glium::Frame, point: Point2<f32>, is_selected: bool) {
+        let r = self.fix_point_circles.outer_radius();
+        let inner_radius = if is_selected { 0.0f32 } else { r - 1. };
+        self.fix_point_circles.set_inner_radius(inner_radius);
+        self.fix_point_circles
+            .draw(frame, point + self.spline_position.to_vec() - vec2(r, r));
+    }
+
+    fn draw_control_line(&mut self, frame: &mut glium::Frame, segment: [Point2<f32>; 3]) {
+        self.control_lines.clear();
+        self.control_lines
+            .push_point(segment[0], Color::new(0.5, 0.5, 0.5, 1.));
+        self.control_lines
+            .push_point(segment[1], Color::new(0.5, 0.5, 0.5, 1.));
+        self.control_lines
+            .push_point(segment[2], Color::new(0.5, 0.5, 0.5, 1.));
+        self.control_lines.draw(frame, self.spline_position);
     }
 
     fn clear_frame(&mut self, frame: &mut glium::Frame) {
@@ -218,48 +239,130 @@ impl<'cx> Application<'cx> {
             for (i, segement) in self.spline.segments().iter().enumerate() {
                 println!("segment_{i} : {segement:?}");
             }
+        } else if key_code == KeyCode::KeyC && !is_repeat {
+            self.control_elements_mode = match self.control_elements_mode {
+                ControlElementsMode::All => ControlElementsMode::None,
+                ControlElementsMode::Minimal => ControlElementsMode::All,
+                ControlElementsMode::None => ControlElementsMode::Minimal,
+            }
+        } else if key_code == KeyCode::Delete || key_code == KeyCode::Backspace && !is_repeat {
+            match &mut self.selected_point {
+                Some((i, 1)) => {
+                    self.spline.segments_mut().remove(*i);
+                    if let Some(new_i) = i.checked_sub(1) {
+                        *i = new_i;
+                    } else if !self.spline.segments().is_empty() {
+                        *i = 0;
+                    } else {
+                        self.selected_point = None;
+                    }
+                }
+                Some((i, j)) => {
+                    let segment = &mut self.spline.segments_mut()[*i];
+                    segment[*j] = segment[1];
+                }
+                _ => (),
+            }
+        } else if key_code == KeyCode::KeyF && !is_repeat {
+            let draw_mode = self.spline.draw_mode();
+            self.spline.set_draw_mode(match draw_mode {
+                PathDrawingMode::Line => PathDrawingMode::Fill,
+                PathDrawingMode::Fill => PathDrawingMode::Line,
+            });
         }
     }
 
     #[allow(unused_variables)]
     fn key_up(&mut self, key_code: KeyCode) {}
 
+    fn left_click_down(&mut self, position_physical: Point2<f32>) {
+        let previous_selected_point = self.selected_point;
+        self.selected_point = None;
+        for (i, segment) in self.spline.segments().iter().enumerate() {
+            for j in [0, 2, 1] {
+                let point = segment[j] + self.spline_position.to_vec();
+                let r = self.fix_point_circles.outer_radius();
+                let is_preivously_selected =
+                    previous_selected_point.is_some_and(|prev| prev == (i, j));
+                let allowed_distance = if is_preivously_selected { r * 2. } else { r };
+                let distance = position_physical.distance(point);
+                if distance <= allowed_distance {
+                    self.selected_point = Some((i, j));
+                }
+            }
+        }
+    }
+
+    fn right_click_down(&mut self, position_physical: Point2<f32>) {
+        if let Some(i_selected) = self.selected_point {
+            let selected_segment = &mut self.spline.segments_mut()[i_selected.0];
+            let selected_point = selected_segment[i_selected.1];
+            let distance =
+                position_physical.distance(selected_point + self.spline_position.to_vec());
+            let r = self.fix_point_circles.outer_radius();
+            if distance > r * 2. {
+                let new_segment_position = position_physical - self.spline_position.to_vec();
+                self.spline
+                    .segments_mut()
+                    .insert(i_selected.0, [new_segment_position; 3]);
+                self.selected_point = Some((i_selected.0, 1));
+            } else {
+                if selected_segment[0].distance2(selected_segment[1]) == 0. {
+                    selected_segment[0] = selected_segment[1] - vec2(r * 8., 0.);
+                }
+                if selected_segment[2].distance2(selected_segment[1]) == 0. {
+                    selected_segment[2] = selected_segment[1] + vec2(r * 8., 0.);
+                }
+            }
+        } else {
+            let new_segment_position = position_physical - self.spline_position.to_vec();
+            self.spline.segments_mut().push([new_segment_position; 3]);
+            self.selected_point = Some((self.spline.segments().len() - 1, 1));
+        }
+    }
+
+    fn left_click_dragged(&mut self, _delta_physical: Vector2<f32>, position_physical: Point2<f32>) {
+        let Some(i_selected) = self.selected_point else {
+            return;
+        };
+        let alt_is_down = self.input_helper.key_is_down(KeyCode::AltLeft)
+            || self.input_helper.key_is_down(KeyCode::AltRight);
+        let shift_is_down = self.input_helper.key_is_down(KeyCode::ShiftLeft)
+            || self.input_helper.key_is_down(KeyCode::ShiftRight);
+        let selected_segment = &mut self.spline.segments_mut()[i_selected.0];
+        if i_selected.1 == 1 {
+            let v0 = selected_segment[0] - selected_segment[1];
+            let v2 = selected_segment[2] - selected_segment[1];
+            selected_segment[1] = position_physical - self.spline_position.to_vec();
+            if !alt_is_down {
+                selected_segment[0] = selected_segment[1] + v0;
+                selected_segment[2] = selected_segment[1] + v2;
+            }
+        } else {
+            selected_segment[i_selected.1] = position_physical - self.spline_position.to_vec();
+            let selected_point = selected_segment[i_selected.1];
+            if !alt_is_down {
+                let center_point = selected_segment[1];
+                let oppsite_point = &mut selected_segment[if i_selected.1 == 0 { 2 } else { 0 }];
+                let d = if shift_is_down {
+                    selected_point.distance(center_point)
+                } else {
+                    oppsite_point.distance(center_point)
+                };
+                let v = (selected_point - center_point).normalize_to(d);
+                *oppsite_point = center_point - v;
+            }
+        }
+    }
+
     fn mouse_down(&mut self, button: u32) {
-        let Some(location) = self.input_helper.cursor_position_physical() else {
+        let Some(position_physical) = self.input_helper.cursor_position_physical() else {
             return;
         };
         if button == 0 {
-            let previous_selected_point = self.selected_point;
-            self.selected_point = None;
-            for (i, segment) in self.spline.segments().iter().enumerate() {
-                for (j, point) in segment.iter().enumerate() {
-                    let point = *point + self.spline_position.to_vec();
-                    let allowed_distance =
-                        if previous_selected_point.is_some_and(|prev| prev == (i, j)) {
-                            self.fix_point_circles.outer_radius() * 2.
-                        } else {
-                            self.fix_point_circles.outer_radius()
-                        };
-                    let distance = location.distance(point);
-                    if distance <= allowed_distance {
-                        self.selected_point = Some((i, j));
-                    }
-                }
-            }
+            self.left_click_down(position_physical);
         } else if button == 1 {
-            if let Some(i_selected) = self.selected_point {
-                let selected_point = self.spline.segments()[i_selected.0][i_selected.1];
-                let distance = location.distance(selected_point + self.spline_position.to_vec());
-                if distance > self.fix_point_circles.outer_radius() * 2. {
-                    self.selected_point = None;
-                }
-            } else {
-                let draw_mode = self.spline.draw_mode();
-                self.spline.set_draw_mode(match draw_mode {
-                    PathDrawingMode::Line => PathDrawingMode::Fill,
-                    PathDrawingMode::Fill => PathDrawingMode::Line,
-                });
-            }
+            self.right_click_down(position_physical);
         }
     }
 
@@ -268,21 +371,11 @@ impl<'cx> Application<'cx> {
 
     #[allow(unused_variables)]
     fn cursor_moved(&mut self, delta: Vector2<f32>) {
-        let physical_delta = delta * self.window.scale_factor() as f32;
+        let delta_physical = delta * self.window.scale_factor() as f32;
+        let position_physical = self.input_helper.cursor_position_physical();
         if self.input_helper.button_is_pressed(0) {
-            let Some(location) = self.input_helper.cursor_position_physical() else {
-                return;
-            };
-            let Some(i_selected) = self.selected_point else {
-                return;
-            };
-            let segment = self.spline.segments_mut();
-            if i_selected.1 == 1 {
-                segment[i_selected.0][0] += physical_delta;
-                segment[i_selected.0][1] += physical_delta;
-                segment[i_selected.0][2] += physical_delta;
-            } else {
-                segment[i_selected.0][i_selected.1] += physical_delta;
+            if let Some(position_physical) = position_physical {
+                self.left_click_dragged(delta_physical, position_physical);
             }
         }
     }
