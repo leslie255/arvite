@@ -1,6 +1,8 @@
 use std::{
     cell::UnsafeCell,
     fmt::{self, Display},
+    ops::{Coroutine, CoroutineState},
+    pin::Pin,
     sync::{Arc, Mutex, RwLock},
 };
 
@@ -13,7 +15,7 @@ macro_rules! match_into {
             $pat => Some($expr1),
             _ => None,
         }
-    }
+    };
 }
 
 #[macro_export]
@@ -23,7 +25,7 @@ macro_rules! match_into_unchecked {
             $pat => $expr1,
             _ => std::hint::unreachable_unchecked(),
         }
-    }
+    };
 }
 
 pub trait BoolToggle {
@@ -182,4 +184,38 @@ impl<S> WithZ<S> for Point3<S> {
     fn with_z(self, new_z: S) -> Self {
         Self { z: new_z, ..self }
     }
+}
+
+struct IterFromCoroutine<C: Coroutine<Return = ()> + Unpin> {
+    coroutine: C,
+}
+
+impl<C: Coroutine<Return = ()> + Unpin> IterFromCoroutine<C> {
+    pub fn new(coroutine: C) -> Self {
+        Self { coroutine }
+    }
+}
+
+impl<C: Coroutine<Return = ()> + Unpin> Iterator for IterFromCoroutine<C> {
+    type Item = C::Yield;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match Pin::new(&mut self.coroutine).resume(()) {
+            CoroutineState::Yielded(x) => Some(x),
+            CoroutineState::Complete(()) => None,
+        }
+    }
+}
+
+pub fn generator<T>(
+    coroutine: impl Coroutine<Return = (), Yield = T> + Unpin,
+) -> impl Iterator<Item = T> {
+    IterFromCoroutine::new(coroutine)
+}
+
+#[macro_export]
+macro_rules! generator {
+    {$($stmts:stmt)*} => {{
+        $crate::utils::generator(#[coroutine] || {$($stmts)*})
+    }}
 }

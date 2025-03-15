@@ -1,3 +1,5 @@
+// This is very much speghetti code since I intended it to be a very simple testing code at first.
+
 use std::time::{Duration, Instant};
 
 use cgmath::*;
@@ -5,6 +7,7 @@ use glium::{
     Surface,
     winit::{
         self,
+        event::MouseScrollDelta,
         keyboard::{KeyCode, PhysicalKey},
     },
 };
@@ -14,6 +17,7 @@ use crate::{
     context::Context,
     input::InputHelper,
     shapes::{BezierSplinePath, Circle, Path, PathDrawingMode},
+    svg::SvgPathBuilder,
     text::Line,
 };
 
@@ -24,6 +28,88 @@ const BEZIER_SPLINE_SHAPE: &[[Point2<f32>; 3]] = &[
     [point2(247., 71.), point2(209., 121.), point2(172., 76.)],
     [point2(104., 49.), point2(46., 136.), point2(0., 222.)],
 ];
+
+#[allow(clippy::excessive_precision)]
+pub fn build_shape(spline: &mut BezierSplinePath<'static, '_>) {
+    let mut builder = SvgPathBuilder::new(spline);
+    builder.command_m(point2(168.908691, 218.654785));
+    builder.command_l(point2(129.000488, 122.14209));
+    builder.command_l(point2(125.539063, 122.14209));
+    builder.command_l(point2(87.870605, 218.654785));
+    builder.command_z();
+    builder.command_m(point2(12.533691, 306.412109));
+    builder.command_c([
+        point2(22.578663, 305.733398),
+        point2(30.655243, 301.186096),
+        point2(36.763672, 292.77002),
+    ]);
+    builder.command_c([
+        point2(40.700214, 287.476044),
+        point2(46.333458, 275.802338),
+        point2(53.663574, 257.748535),
+    ]);
+    builder.command_l(point2(146.307617, 29.498047));
+    builder.command_l(point2(157.913574, 29.498047));
+    builder.command_l(point2(250.964844, 248.585938));
+    builder.command_c([
+        point2(261.417053, 273.155396),
+        point2(269.222137, 289.003143),
+        point2(274.380371, 296.129639),
+    ]);
+    builder.command_c([
+        point2(279.538605, 303.256134),
+        point2(286.868591, 306.683594),
+        point2(296.370605, 306.412109),
+    ]);
+    builder.command_l(point2(296.370605, 317.));
+    builder.command_l(point2(161.375, 317.));
+    builder.command_l(point2(161.375, 306.412109));
+    builder.command_c([
+        point2(174.94928, 305.869141),
+        point2(183.874252, 304.715332),
+        point2(188.150146, 302.950684),
+    ]);
+    builder.command_c([
+        point2(192.426041, 301.186035),
+        point2(194.563965, 296.706573),
+        point2(194.563965, 289.512207),
+    ]);
+    builder.command_c([
+        point2(194.563965, 286.254395),
+        point2(193.478043, 281.299835),
+        point2(191.306152, 274.648438),
+    ]);
+    builder.command_c([
+        point2(189.94873, 270.711914),
+        point2(188.116226, 265.960968),
+        point2(185.808594, 260.395508),
+    ]);
+    builder.command_l(point2(175.220703, 235.147461));
+    builder.command_l(point2(81.558594, 235.147461));
+    builder.command_c([
+        point2(75.450165, 251.708069),
+        point2(71.51368, 262.499481),
+        point2(69.749023, 267.521973),
+    ]);
+    builder.command_c([
+        point2(66.083969, 278.245667),
+        point2(64.251465, 286.050751),
+        point2(64.251465, 290.9375),
+    ]);
+    builder.command_c([
+        point2(64.251465, 296.910187),
+        point2(68.255821, 301.253906),
+        point2(76.264648, 303.96875),
+    ]);
+    builder.command_c([
+        point2(81.015648, 305.461914),
+        point2(88.142044, 306.276367),
+        point2(97.644043, 306.412109),
+    ]);
+    builder.command_l(point2(97.644043, 317.));
+    builder.command_l(point2(12.533691, 317.));
+    builder.command_z();
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct FpsCounter {
@@ -119,7 +205,7 @@ impl<'cx> Application<'cx> {
                 line.set_string("FPS : ---.---".into());
                 line.set_fg_color(Color::new(1., 1., 1., 0.7));
                 line.set_bg_color(Color::new(0.5, 0.5, 0.5, 0.5));
-                line.set_font_size(20. * scale_factor);
+                line.set_font_size(16. * scale_factor);
                 line
             },
             position_text: {
@@ -131,10 +217,11 @@ impl<'cx> Application<'cx> {
             },
             spline: {
                 let mut spline = BezierSplinePath::new(context);
-                spline.set_resolution(64);
+                spline.set_resolution(24);
+                spline.set_is_closed(false);
                 spline.set_draw_mode(PathDrawingMode::Line);
-                spline.set_color(Color::new(1., 0.4, 0.5, 1.));
-                spline.segments_mut().extend_from_slice(BEZIER_SPLINE_SHAPE);
+                spline.set_color(Color::new(1., 1., 1., 1.));
+                build_shape(&mut spline);
                 spline
             },
             fix_point_circles: {
@@ -158,7 +245,7 @@ impl<'cx> Application<'cx> {
 
         self.clear_frame(&mut frame);
 
-        self.spline.draw(&mut frame, self.spline_position);
+        self.spline.draw(&mut frame, self.spline_position, 1.);
 
         // Knots / control points.
         if self.control_elements_mode != ControlElementsMode::None {
@@ -209,8 +296,11 @@ impl<'cx> Application<'cx> {
         let r = self.fix_point_circles.outer_radius();
         let inner_radius = if is_selected { 0.0f32 } else { r - 1. };
         self.fix_point_circles.set_inner_radius(inner_radius);
-        self.fix_point_circles
-            .draw(frame, point + self.spline_position.to_vec() - vec2(r, r));
+        self.fix_point_circles.draw(
+            frame,
+            point + self.spline_position.to_vec() - vec2(r, r),
+            1.,
+        );
     }
 
     fn draw_control_line(&mut self, frame: &mut glium::Frame, segment: [Point2<f32>; 3]) {
@@ -221,7 +311,7 @@ impl<'cx> Application<'cx> {
             .push_point(segment[1], Color::new(0.5, 0.5, 0.5, 1.));
         self.control_lines
             .push_point(segment[2], Color::new(0.5, 0.5, 0.5, 1.));
-        self.control_lines.draw(frame, self.spline_position);
+        self.control_lines.draw(frame, self.spline_position, 1.);
     }
 
     fn clear_frame(&mut self, frame: &mut glium::Frame) {
@@ -234,19 +324,34 @@ impl<'cx> Application<'cx> {
 
     #[allow(unused_variables)]
     fn key_down(&mut self, key_code: KeyCode, _text: Option<&str>, is_repeat: bool) {
-        if key_code == KeyCode::KeyP && !is_repeat {
-            println!("Shape:");
-            for (i, segement) in self.spline.segments().iter().enumerate() {
-                println!("segment_{i} : {segement:?}");
+        match key_code {
+            KeyCode::KeyP if !is_repeat => {
+                println!("Dumping shape data (P)");
+                for (i, segement) in self.spline.segments().iter().enumerate() {
+                    println!("segment_{i} : {segement:?}");
+                }
             }
-        } else if key_code == KeyCode::KeyC && !is_repeat {
-            self.control_elements_mode = match self.control_elements_mode {
-                ControlElementsMode::All => ControlElementsMode::None,
-                ControlElementsMode::Minimal => ControlElementsMode::All,
-                ControlElementsMode::None => ControlElementsMode::Minimal,
+            KeyCode::KeyC if !is_repeat && self.input_helper.shift_is_down() => {
+                println!("Changed control elements mode (C/Shift+C)");
+                self.control_elements_mode = match self.control_elements_mode {
+                    ControlElementsMode::All => ControlElementsMode::Minimal,
+                    ControlElementsMode::Minimal => ControlElementsMode::None,
+                    ControlElementsMode::None => ControlElementsMode::All,
+                }
             }
-        } else if key_code == KeyCode::Delete || key_code == KeyCode::Backspace && !is_repeat {
-            match &mut self.selected_point {
+            KeyCode::KeyC if !is_repeat => {
+                println!("Changed control elements mode (C/Shift+C)");
+                self.control_elements_mode = match self.control_elements_mode {
+                    ControlElementsMode::All => ControlElementsMode::None,
+                    ControlElementsMode::Minimal => ControlElementsMode::All,
+                    ControlElementsMode::None => ControlElementsMode::Minimal,
+                }
+            }
+            KeyCode::KeyL if !is_repeat => {
+                println!("Toggled close path (L)");
+                self.spline.set_is_closed(!self.spline.is_closed());
+            }
+            KeyCode::Delete | KeyCode::Backspace => match &mut self.selected_point {
                 Some((i, 1)) => {
                     self.spline.segments_mut().remove(*i);
                     if let Some(new_i) = i.checked_sub(1) {
@@ -260,15 +365,25 @@ impl<'cx> Application<'cx> {
                 Some((i, j)) => {
                     let segment = &mut self.spline.segments_mut()[*i];
                     segment[*j] = segment[1];
+                    *j = 1;
                 }
                 _ => (),
+            },
+            KeyCode::KeyF if !is_repeat => {
+                let draw_mode = self.spline.draw_mode();
+                self.spline.set_draw_mode(match draw_mode {
+                    PathDrawingMode::Line => PathDrawingMode::Fill,
+                    PathDrawingMode::Fill => PathDrawingMode::Line,
+                });
             }
-        } else if key_code == KeyCode::KeyF && !is_repeat {
-            let draw_mode = self.spline.draw_mode();
-            self.spline.set_draw_mode(match draw_mode {
-                PathDrawingMode::Line => PathDrawingMode::Fill,
-                PathDrawingMode::Fill => PathDrawingMode::Line,
-            });
+            KeyCode::Slash if self.input_helper.shift_is_down() => {
+                println!("Keys:");
+                println!("[C/Shift+C]\t: cycle control element modes");
+                println!("[L]\t\t: toggle closed path");
+                println!("[F]\t\t: toggle fill");
+                println!("[backspace]\t: delete");
+            }
+            _ => (),
         }
     }
 
@@ -278,16 +393,24 @@ impl<'cx> Application<'cx> {
     fn left_click_down(&mut self, position_physical: Point2<f32>) {
         let previous_selected_point = self.selected_point;
         self.selected_point = None;
-        for (i, segment) in self.spline.segments().iter().enumerate() {
-            for j in [0, 2, 1] {
-                let point = segment[j] + self.spline_position.to_vec();
-                let r = self.fix_point_circles.outer_radius();
-                let is_preivously_selected =
-                    previous_selected_point.is_some_and(|prev| prev == (i, j));
-                let allowed_distance = if is_preivously_selected { r * 2. } else { r };
-                let distance = position_physical.distance(point);
-                if distance <= allowed_distance {
-                    self.selected_point = Some((i, j));
+        if self.control_elements_mode != ControlElementsMode::None {
+            'outer_loop: for (i, segment) in self.spline.segments().iter().enumerate() {
+                let is_selected_segment = previous_selected_point.is_some_and(|(i_, _)| i_ == i);
+                let js = match self.control_elements_mode {
+                    ControlElementsMode::Minimal if !is_selected_segment => &[1][..],
+                    _ => &[0usize, 2, 1],
+                };
+                for &j in js {
+                    let point = segment[j] + self.spline_position.to_vec();
+                    let r = self.fix_point_circles.outer_radius();
+                    let is_preivously_selected =
+                        previous_selected_point.is_some_and(|prev| prev == (i, j));
+                    let allowed_distance = if is_preivously_selected { r * 2. } else { r };
+                    let distance = position_physical.distance(point);
+                    if distance <= allowed_distance {
+                        self.selected_point = Some((i, j));
+                        break 'outer_loop;
+                    }
                 }
             }
         }
@@ -321,30 +444,30 @@ impl<'cx> Application<'cx> {
         }
     }
 
-    fn left_click_dragged(&mut self, _delta_physical: Vector2<f32>, position_physical: Point2<f32>) {
+    fn left_click_dragged(
+        &mut self,
+        _delta_physical: Vector2<f32>,
+        position_physical: Point2<f32>,
+    ) {
         let Some(i_selected) = self.selected_point else {
             return;
         };
-        let alt_is_down = self.input_helper.key_is_down(KeyCode::AltLeft)
-            || self.input_helper.key_is_down(KeyCode::AltRight);
-        let shift_is_down = self.input_helper.key_is_down(KeyCode::ShiftLeft)
-            || self.input_helper.key_is_down(KeyCode::ShiftRight);
         let selected_segment = &mut self.spline.segments_mut()[i_selected.0];
         if i_selected.1 == 1 {
             let v0 = selected_segment[0] - selected_segment[1];
             let v2 = selected_segment[2] - selected_segment[1];
             selected_segment[1] = position_physical - self.spline_position.to_vec();
-            if !alt_is_down {
+            if !self.input_helper.alt_is_down() {
                 selected_segment[0] = selected_segment[1] + v0;
                 selected_segment[2] = selected_segment[1] + v2;
             }
         } else {
             selected_segment[i_selected.1] = position_physical - self.spline_position.to_vec();
             let selected_point = selected_segment[i_selected.1];
-            if !alt_is_down {
+            if !self.input_helper.alt_is_down() {
                 let center_point = selected_segment[1];
                 let oppsite_point = &mut selected_segment[if i_selected.1 == 0 { 2 } else { 0 }];
-                let d = if shift_is_down {
+                let d = if self.input_helper.shift_is_down() {
                     selected_point.distance(center_point)
                 } else {
                     oppsite_point.distance(center_point)
@@ -353,6 +476,21 @@ impl<'cx> Application<'cx> {
                 *oppsite_point = center_point - v;
             }
         }
+    }
+
+    fn right_click_dragged(
+        &mut self,
+        _delta_physical: Vector2<f32>,
+        _position_physical: Point2<f32>,
+    ) {
+    }
+
+    fn middle_click_dragged(
+        &mut self,
+        delta_physical: Vector2<f32>,
+        _position_physical: Point2<f32>,
+    ) {
+        self.spline_position += delta_physical;
     }
 
     fn mouse_down(&mut self, button: u32) {
@@ -372,16 +510,25 @@ impl<'cx> Application<'cx> {
     #[allow(unused_variables)]
     fn cursor_moved(&mut self, delta: Vector2<f32>) {
         let delta_physical = delta * self.window.scale_factor() as f32;
-        let position_physical = self.input_helper.cursor_position_physical();
-        if self.input_helper.button_is_pressed(0) {
-            if let Some(position_physical) = position_physical {
+        if let Some(position_physical) = self.input_helper.cursor_position_physical() {
+            if self.input_helper.button_is_pressed(0) {
                 self.left_click_dragged(delta_physical, position_physical);
+            } else if self.input_helper.button_is_pressed(1) {
+                self.right_click_dragged(delta_physical, position_physical);
+            } else if self.input_helper.button_is_pressed(2) {
+                self.middle_click_dragged(delta_physical, position_physical);
             }
         }
     }
 
     #[allow(unused_variables)]
-    fn resized(&mut self, frame_size: Vector2<f32>) {}
+    fn frame_resized(&mut self, frame_size: Vector2<f32>) {}
+
+    fn scrolled(&mut self, delta_physical: Vector2<f32>) {
+        if delta_physical.x != 0. {
+            self.spline_position += delta_physical;
+        }
+    }
 }
 
 impl winit::application::ApplicationHandler for Application<'_> {
@@ -408,7 +555,7 @@ impl winit::application::ApplicationHandler for Application<'_> {
             winit::event::WindowEvent::Resized(window_size) => {
                 let window_size = Vector2::new(window_size.width, window_size.height);
                 self.context.resize(window_size);
-                self.resized(self.context.display_size());
+                self.frame_resized(self.context.display_size());
                 self.window.request_redraw();
             }
             winit::event::WindowEvent::KeyboardInput {
@@ -455,7 +602,17 @@ impl winit::application::ApplicationHandler for Application<'_> {
             winit::event::DeviceEvent::MouseMotion { delta } => {
                 self.cursor_moved(Vector2::from(delta).map(|f| f as f32));
             }
-            winit::event::DeviceEvent::MouseWheel { delta: _ } => (),
+            winit::event::DeviceEvent::MouseWheel { delta } => match delta {
+                MouseScrollDelta::LineDelta(dx_lines, dy_lines) => {
+                    self.scrolled(
+                        vec2(dx_lines, dy_lines)
+                            .map(|f| f * 16.0 * self.window.scale_factor() as f32),
+                    );
+                }
+                MouseScrollDelta::PixelDelta(physical_position) => {
+                    self.scrolled(vec2(physical_position.x, physical_position.y).map(|f| f as f32));
+                }
+            },
             winit::event::DeviceEvent::Button { button, state } => {
                 self.input_helper.notify_button_event(button, state);
                 match state {

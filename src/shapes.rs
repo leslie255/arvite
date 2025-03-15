@@ -7,9 +7,13 @@ use crate::{
     bezier,
     color::Color,
     context::Context,
-    match_into_unchecked,
+    generator, match_into_unchecked,
     mesh::{self, Mesh},
 };
+
+fn point_is_nan(point: Point2<f32>) -> bool {
+    point.x.is_nan() && point.y.is_nan()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathDrawingMode {
@@ -26,10 +30,12 @@ pub(crate) struct ColoredVertex {
 
 glium::implement_vertex!(ColoredVertex, position, color);
 
+/// A spline made from cubic beziers.
 #[derive(Debug)]
 pub struct BezierSplinePath<'a, 'cx> {
     path: Path<'cx>,
-    points: Cow<'a, [[Point2<f32>; 3]]>,
+    segments: Cow<'a, [[Point2<f32>; 3]]>,
+    is_closed: bool,
     color: Color,
     resolution: u32,
     needs_rebuild: bool,
@@ -39,25 +45,30 @@ impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
     pub fn new(context: &'cx Context) -> Self {
         Self {
             path: Path::new(context),
-            points: Cow::default(),
+            segments: Cow::default(),
+            is_closed: true,
             color: Color::default(),
             resolution: 48,
             needs_rebuild: false,
         }
     }
 
+    pub(crate) fn path(&self) -> &Path<'cx> {
+        &self.path
+    }
+
     pub fn segments<'b>(&'b self) -> &'b [[Point2<f32>; 3]]
     where
         'a: 'b,
     {
-        &self.points
+        &self.segments
     }
 
     pub fn segments_mut(&mut self) -> &mut Vec<[Point2<f32>; 3]> {
         self.needs_rebuild = true;
-        let points = mem::take(&mut self.points);
-        self.points = points.into_owned().into();
-        unsafe { match_into_unchecked!(&mut self.points, Cow::Owned(vec) => vec) }
+        let points = mem::take(&mut self.segments);
+        self.segments = points.into_owned().into();
+        unsafe { match_into_unchecked!(&mut self.segments, Cow::Owned(vec) => vec) }
     }
 
     pub fn set_resolution(&mut self, resolution: u32) {
@@ -77,6 +88,62 @@ impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
         self.color
     }
 
+    pub fn set_is_closed(&mut self, is_closed: bool) {
+        self.needs_rebuild = true;
+        self.is_closed = is_closed;
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.is_closed
+    }
+
+    /// Similar to SVG path's `L` command.
+    /// If no current points exists, adds a new point at (0, 0,).
+    pub fn append_linear(&mut self, point: Point2<f32>) {
+        let segments = self.segments_mut();
+        match segments.last_mut() {
+            Some(last) => last[2] = last[1],
+            None => segments.push([point2(0., 0.), point2(0., 0.), point2(0., 0.)]),
+        }
+        segments.push([point, point, point]);
+    }
+
+    /// Similar to SVG path's `Q` command.
+    /// If no current points exists, adds a new point at (0, 0,).
+    pub fn append_quadratic(&mut self, points: [Point2<f32>; 2]) {
+        let segments = self.segments_mut();
+        match segments.last_mut() {
+            Some(last) => last[2] = points[0],
+            None => segments.push([point2(0., 0.), point2(0., 0.), point2(0., 0.)]),
+        }
+        segments.push([points[0], points[1], points[1]]);
+    }
+
+    /// Similar to SVG path's `C` command.
+    /// If no current points exists, adds a new point at (0, 0,).
+    pub fn append_cubic(&mut self, points: [Point2<f32>; 3]) {
+        let segments = self.segments_mut();
+        match segments.last_mut() {
+            Some(last) => last[2] = points[0],
+            None => segments.push([point2(0., 0.), point2(0., 0.), point2(0., 0.)]),
+        }
+        segments.push([points[1], points[2], points[2]]);
+    }
+
+    /// Iterator through every cubic beziers that makes up this spline.
+    pub fn cubics(&self) -> impl Iterator<Item = [Point2<f32>; 4]> {
+        generator! {
+            for &[this, next] in self.segments().array_windows::<2>() {
+                yield [this[1], this[2], next[0], next[1]];
+            }
+            if self.segments().len() >= 3 && self.is_closed {
+                let first = self.segments().first().unwrap();
+                let last = self.segments().last().unwrap();
+                yield [last[1], last[2], first[0], first[1]]
+            }
+        }
+    }
+
     fn rebuild_mesh_if_needed(&mut self) {
         if !self.needs_rebuild {
             return;
@@ -91,29 +158,37 @@ impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
         if self.segments().len() <= 1 {
             return;
         }
-        for (i, segment) in self.segments().iter().enumerate() {
-            let next_segment = match self.segments().get(i + 1) {
-                Some(xs) => xs,
-                None => &self.segments()[0],
-            };
-            let points = [segment[1], segment[2], next_segment[0], next_segment[1]];
+        let step_size = 1. / self.resolution() as f32;
+        for points in self.cubics() {
             if points[1] == points[0] && points[2] == points[3] {
-                // Special optimization for when having a segment of just straight lines.
+                // Linear.
                 path.push_point(points[0], self.color);
                 path.push_point(points[3], self.color);
-                continue;
-            }
-            let step_size = 1. / self.resolution() as f32;
-            for t in (0..=self.resolution()).map(|i| i as f32 * step_size) {
-                path.push_point(bezier::bezier_cubic(points, t), self.color);
+            } else if points[0] == points[1] || points[2] == points[3] || points[1] == points[2] {
+                // Quadratic.
+                let points = match points {
+                    // Compiler would probably optimize this.
+                    _ if points[0] == points[1] => [points[0], points[2], points[3]],
+                    _ if points[2] == points[3] => [points[0], points[1], points[2]],
+                    _ if points[1] == points[2] => [points[0], points[1], points[3]],
+                    _ => unreachable!(),
+                };
+                for t in (0..=self.resolution()).map(|i| i as f32 * step_size) {
+                    path.push_point(bezier::bezier_quadratic(points, t), self.color);
+                }
+            } else {
+                // Cubic.
+                for t in (0..=self.resolution()).map(|i| i as f32 * step_size) {
+                    path.push_point(bezier::bezier_cubic(points, t), self.color);
+                }
             }
         }
         self.path = path;
     }
 
-    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>) {
+    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>, scale: f32) {
         self.rebuild_mesh_if_needed();
-        self.path.draw(frame, position)
+        self.path.draw(frame, position, scale)
     }
 
     pub fn draw_mode(&self) -> PathDrawingMode {
@@ -206,9 +281,9 @@ impl<'a, 'cx> BezierPath<'a, 'cx> {
         }
     }
 
-    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>) {
+    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>, scale: f32) {
         self.rebuild_mesh_if_needed();
-        self.path.draw(frame, position)
+        self.path.draw(frame, position, scale)
     }
 
     pub fn draw_mode(&self) -> PathDrawingMode {
@@ -278,7 +353,7 @@ impl<'cx> Path<'cx> {
         self.mesh.vertices().len()
     }
 
-    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>) {
+    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>, scale: f32) {
         self.mesh.update_if_needed();
         let (polygon_mode, line_width) = match self.draw_mode() {
             _ if self.n_points() <= 1 => return,
@@ -286,7 +361,8 @@ impl<'cx> Path<'cx> {
             PathDrawingMode::Fill => (glium::PolygonMode::Fill, None),
         };
         let (frame_width, frame_height) = frame.get_dimensions();
-        let model_view = Matrix4::from_translation(Vector3::new(position.x, position.y, 0.));
+        let model_view = Matrix4::from_translation(Vector3::new(position.x, position.y, 0.))
+            * Matrix4::from_scale(scale);
         let projection = cgmath::ortho(0., frame_width as f32, frame_height as f32, 0., -1., 1.);
         self.mesh.draw(
             frame,
@@ -388,13 +464,14 @@ impl<'cx> Circle<'cx> {
         indices.extend_from_slice(&indices_data);
     }
 
-    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>) {
+    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>, scale: f32) {
         if self.fill_color.a.is_zero() {
             return;
         }
         self.mesh.update_if_needed();
         let (frame_width, frame_height) = frame.get_dimensions();
-        let model_view = Matrix4::from_translation(Vector3::new(position.x, position.y, 0.));
+        let model_view = Matrix4::from_translation(vec3(position.x, position.y, 0.))
+            * Matrix4::from_scale(scale);
         let projection = cgmath::ortho(0., frame_width as f32, frame_height as f32, 0., -1., 1.);
         self.mesh.draw(
             frame,
@@ -476,14 +553,15 @@ impl<'cx> Rect<'cx> {
         self.set_fill_color(RectFillColor::GradientVertical(color_top, color_bottom));
     }
 
-    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>) {
+    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>, scale: f32) {
         match self.fill_color {
             RectFillColor::Uniform(color) if color.a.is_zero() => return,
             _ => (),
         }
         self.mesh.update_if_needed();
         let (frame_width, frame_height) = frame.get_dimensions();
-        let model_view = Matrix4::from_translation(Vector3::new(position.x, position.y, 0.));
+        let model_view = Matrix4::from_translation(vec3(position.x, position.y, 0.))
+            * Matrix4::from_scale(scale);
         let projection = cgmath::ortho(0., frame_width as f32, frame_height as f32, 0., -1., 1.);
         self.mesh.draw(
             frame,

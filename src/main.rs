@@ -1,19 +1,26 @@
-#![feature(array_chunks, iter_array_chunks)]
+#![feature(
+    array_chunks,
+    array_windows,
+    iter_array_chunks,
+    coroutines,
+    coroutine_trait
+)]
 #![allow(dead_code, linker_messages)]
 
 use context::Context;
 use glium::{backend::glutin, winit};
 
-pub mod application;
+pub(crate) mod application;
 pub mod bezier;
 pub mod color;
 pub mod context;
-pub mod input;
+pub(crate) mod input;
 pub mod mesh;
-pub mod resource;
+pub(crate) mod resource;
 pub mod shapes;
+pub(crate) mod svg;
 pub mod text;
-pub mod utils;
+pub(crate) mod utils;
 
 use application::Application;
 

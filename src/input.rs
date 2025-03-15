@@ -75,6 +75,26 @@ impl InputHelper {
     pub fn notify_button_event(&mut self, button: u32, state: glium::winit::event::ElementState) {
         self.downed_buttons[button as usize] = state.is_pressed();
     }
+
+    pub fn shift_is_down(&self) -> bool {
+        self.key_is_down(KeyCode::ShiftLeft)
+            || self.key_is_down(KeyCode::ShiftRight)
+    }
+
+    pub fn control_is_down(&self) -> bool {
+        self.key_is_down(KeyCode::ControlLeft)
+            || self.key_is_down(KeyCode::ControlRight)
+    }
+
+    pub fn alt_is_down(&self) -> bool {
+        self.key_is_down(KeyCode::AltLeft)
+            || self.key_is_down(KeyCode::AltRight)
+    }
+
+    pub fn super_is_down(&self) -> bool {
+        self.key_is_down(KeyCode::SuperLeft)
+            || self.key_is_down(KeyCode::SuperRight)
+    }
 }
 
 impl Default for InputHelper {

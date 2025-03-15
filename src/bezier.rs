@@ -23,8 +23,15 @@ pub fn bezier(ps: &[Point2<f32>], t: f32) -> Point2<f32> {
 }
 
 pub fn bezier_cubic(ps: [Point2<f32>; 4], t: f32) -> Point2<f32> {
-    (-t.powi(3) + 3. * t.powi(2) - 3. * t + 1.) * ps[0]
-        + (3. * t.powi(3) - 6. * t.powi(2) + 3. * t) * ps[1].to_vec()
-        + (-3. * t.powi(3) + 3. * t.powi(2)) * ps[2].to_vec()
-        + (t.powi(3)) * ps[3].to_vec()
+    let t2 = t * t;
+    let t3 = t2 * t;
+    (-t3 + 3. * t2 - 3. * t + 1.) * ps[0]
+        + (3. * t3 - 6. * t2 + 3. * t) * ps[1].to_vec()
+        + (-3. * t3 + 3. * t2) * ps[2].to_vec()
+        + t3 * ps[3].to_vec()
+}
+
+pub fn bezier_quadratic(ps: [Point2<f32>; 3], t: f32) -> Point2<f32> {
+    let t2 = t * t;
+    (t2 - 2. * t + 1.) * ps[0] + (-2. * t2 + 2. * t) * ps[1].to_vec() + t2 * ps[2].to_vec()
 }
