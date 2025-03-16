@@ -17,3 +17,5 @@ derive_more = { version="*", features = ["full"] }
 rand = "0.9"
 rand_xoshiro = "0.7"
 num_cpus = "1"
+display_bytes = "0.2"
+font-types = "0.8"

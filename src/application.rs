@@ -19,97 +19,8 @@ use crate::{
     shapes::{BezierSplinePath, Circle, Path, PathDrawingMode},
     svg::SvgPathBuilder,
     text::Line,
+    truetype::{TrueTypeFont, glyf::Contour},
 };
-
-#[allow(clippy::excessive_precision)]
-const BEZIER_SPLINE_SHAPE: &[[Point2<f32>; 3]] = &[
-    [point2(131., 452.), point2(218., 452.), point2(296., 452.)],
-    [point2(440., 240.), point2(382., 136.), point2(331., 47.)],
-    [point2(247., 71.), point2(209., 121.), point2(172., 76.)],
-    [point2(104., 49.), point2(46., 136.), point2(0., 222.)],
-];
-
-#[allow(clippy::excessive_precision)]
-pub fn build_shape(spline: &mut BezierSplinePath<'static, '_>) {
-    let mut builder = SvgPathBuilder::new(spline);
-    builder.command_m(point2(168.908691, 218.654785));
-    builder.command_l(point2(129.000488, 122.14209));
-    builder.command_l(point2(125.539063, 122.14209));
-    builder.command_l(point2(87.870605, 218.654785));
-    builder.command_z();
-    builder.command_m(point2(12.533691, 306.412109));
-    builder.command_c([
-        point2(22.578663, 305.733398),
-        point2(30.655243, 301.186096),
-        point2(36.763672, 292.77002),
-    ]);
-    builder.command_c([
-        point2(40.700214, 287.476044),
-        point2(46.333458, 275.802338),
-        point2(53.663574, 257.748535),
-    ]);
-    builder.command_l(point2(146.307617, 29.498047));
-    builder.command_l(point2(157.913574, 29.498047));
-    builder.command_l(point2(250.964844, 248.585938));
-    builder.command_c([
-        point2(261.417053, 273.155396),
-        point2(269.222137, 289.003143),
-        point2(274.380371, 296.129639),
-    ]);
-    builder.command_c([
-        point2(279.538605, 303.256134),
-        point2(286.868591, 306.683594),
-        point2(296.370605, 306.412109),
-    ]);
-    builder.command_l(point2(296.370605, 317.));
-    builder.command_l(point2(161.375, 317.));
-    builder.command_l(point2(161.375, 306.412109));
-    builder.command_c([
-        point2(174.94928, 305.869141),
-        point2(183.874252, 304.715332),
-        point2(188.150146, 302.950684),
-    ]);
-    builder.command_c([
-        point2(192.426041, 301.186035),
-        point2(194.563965, 296.706573),
-        point2(194.563965, 289.512207),
-    ]);
-    builder.command_c([
-        point2(194.563965, 286.254395),
-        point2(193.478043, 281.299835),
-        point2(191.306152, 274.648438),
-    ]);
-    builder.command_c([
-        point2(189.94873, 270.711914),
-        point2(188.116226, 265.960968),
-        point2(185.808594, 260.395508),
-    ]);
-    builder.command_l(point2(175.220703, 235.147461));
-    builder.command_l(point2(81.558594, 235.147461));
-    builder.command_c([
-        point2(75.450165, 251.708069),
-        point2(71.51368, 262.499481),
-        point2(69.749023, 267.521973),
-    ]);
-    builder.command_c([
-        point2(66.083969, 278.245667),
-        point2(64.251465, 286.050751),
-        point2(64.251465, 290.9375),
-    ]);
-    builder.command_c([
-        point2(64.251465, 296.910187),
-        point2(68.255821, 301.253906),
-        point2(76.264648, 303.96875),
-    ]);
-    builder.command_c([
-        point2(81.015648, 305.461914),
-        point2(88.142044, 306.276367),
-        point2(97.644043, 306.412109),
-    ]);
-    builder.command_l(point2(97.644043, 317.));
-    builder.command_l(point2(12.533691, 317.));
-    builder.command_z();
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct FpsCounter {
@@ -181,6 +92,8 @@ pub struct Application<'cx> {
     control_elements_mode: ControlElementsMode,
     selected_point: Option<(usize, usize)>,
     spline_position: Point2<f32>,
+    current_char: char,
+    font: TrueTypeFont,
     fps_text: Line<'static, 'cx>,
     position_text: Line<'static, 'cx>,
     spline: BezierSplinePath<'static, 'cx>,
@@ -199,7 +112,12 @@ impl<'cx> Application<'cx> {
             selected_point: None,
             spline_position: point2(200., 200.),
             epoch: Instant::now(),
-            control_elements_mode: ControlElementsMode::Minimal,
+            control_elements_mode: ControlElementsMode::None,
+            current_char: 'A',
+            font: {
+                let ttf_file = context.ttf_font_file.try_clone().unwrap();
+                TrueTypeFont::load_from_file(ttf_file).unwrap()
+            },
             fps_text: {
                 let mut line = Line::new(context);
                 line.set_string("FPS : ---.---".into());
@@ -221,7 +139,6 @@ impl<'cx> Application<'cx> {
                 spline.set_is_closed(false);
                 spline.set_draw_mode(PathDrawingMode::Line);
                 spline.set_color(Color::new(1., 1., 1., 1.));
-                build_shape(&mut spline);
                 spline
             },
             fix_point_circles: {
@@ -237,6 +154,40 @@ impl<'cx> Application<'cx> {
                 path
             },
             context,
+        }
+    }
+
+    fn set_character(&mut self, char: char) {
+        self.current_char = char;
+        self.spline.segments_mut().clear();
+        let Some(glyph) = self.font.get_glyph(char as u32) else {
+            return;
+        };
+        let mut builder = SvgPathBuilder::new(&mut self.spline);
+        let convert_point = |point: Point2<i16>| -> Point2<f32> {
+            let x = point.x as f32 / 4.;
+            let y = 200. - point.y as f32 / 4.;
+            point2(x, y)
+        };
+        for contour in glyph.contours() {
+            match contour {
+                Contour::Begin(point) => {
+                    let point = convert_point(point);
+                    builder.command_m(point.x, point.y)
+                }
+                Contour::Linear(point) => {
+                    let point = convert_point(point);
+                    builder.command_l(point.x, point.y)
+                }
+                Contour::Quadratic([point0, point1]) => {
+                    let point0 = convert_point(point0);
+                    let point1 = convert_point(point1);
+                    builder.command_q(point0.x, point0.y, point1.x, point1.y)
+                }
+                Contour::Close => {
+                    builder.command_z();
+                }
+            }
         }
     }
 
@@ -270,6 +221,33 @@ impl<'cx> Application<'cx> {
 
         self.fps_text.draw(&mut frame, point2(10., 10.));
 
+        let convert_point = |point: Point2<i16>| -> Point2<f32> {
+            let x = point.x as f32 / 4.;
+            let y = 200. - point.y as f32 / 4.;
+            point2(x, y)
+        };
+
+        if let Some(glyph) = self.font.get_glyph(self.current_char as u32) {
+            for &point in &glyph.points {
+                let frame: &mut glium::Frame = &mut frame;
+                let color = if point.is_on_curve {
+                    Color::new(1., 1., 1., 1.)
+                } else {
+                    Color::new(0.3, 0.7, 1., 1.)
+                };
+                let point = convert_point(point.into());
+                let r = self.fix_point_circles.outer_radius();
+                let inner_radius = r - 1.;
+                self.fix_point_circles.set_inner_radius(inner_radius);
+                self.fix_point_circles.uniform_fill(color);
+                self.fix_point_circles.draw(
+                    frame,
+                    point + self.spline_position.to_vec() - vec2(r, r),
+                    1.,
+                );
+            }
+        }
+
         frame.finish().unwrap();
         if let Some(fps) = self.fps_counter.frame() {
             self.fps_text.set_string(format!("FPS: {fps:.3}").into());
@@ -284,18 +262,30 @@ impl<'cx> Application<'cx> {
         if is_selected || self.control_elements_mode == ControlElementsMode::All {
             for (j, &point) in segment.iter().enumerate() {
                 let point_is_selected = self.selected_point.is_some_and(|ij| ij == (i, j));
-                self.draw_point(frame, point, point_is_selected);
+                self.draw_point(frame, point, point_is_selected, j == 2);
             }
             self.draw_control_line(frame, segment);
         } else {
-            self.draw_point(frame, segment[1], false);
+            self.draw_point(frame, segment[1], false, true);
         }
     }
 
-    fn draw_point(&mut self, frame: &mut glium::Frame, point: Point2<f32>, is_selected: bool) {
+    fn draw_point(
+        &mut self,
+        frame: &mut glium::Frame,
+        point: Point2<f32>,
+        is_selected: bool,
+        is_center: bool,
+    ) {
+        let color = if is_center {
+            Color::new(1., 1., 1., 1.)
+        } else {
+            Color::new(0., 1., 1., 1.)
+        };
         let r = self.fix_point_circles.outer_radius();
         let inner_radius = if is_selected { 0.0f32 } else { r - 1. };
         self.fix_point_circles.set_inner_radius(inner_radius);
+        self.fix_point_circles.uniform_fill(color);
         self.fix_point_circles.draw(
             frame,
             point + self.spline_position.to_vec() - vec2(r, r),
@@ -323,32 +313,46 @@ impl<'cx> Application<'cx> {
     fn before_window_event(&mut self, duration_since_last_window_event: Duration) {}
 
     #[allow(unused_variables)]
-    fn key_down(&mut self, key_code: KeyCode, _text: Option<&str>, is_repeat: bool) {
+    fn key_down(&mut self, key_code: KeyCode, text: Option<&str>, is_repeat: bool) {
+        if !self.input_helper.control_is_down()
+            && !self.input_helper.alt_is_down()
+            && !self.input_helper.super_is_down()
+        {
+            if let Some(text) = text {
+                for char in text.chars() {
+                    self.set_character(char);
+                }
+            }
+        }
         match key_code {
-            KeyCode::KeyP if !is_repeat => {
-                println!("Dumping shape data (P)");
+            KeyCode::KeyP if !is_repeat && self.input_helper.control_is_down() => {
+                println!("Dumping shape data");
                 for (i, segement) in self.spline.segments().iter().enumerate() {
                     println!("segment_{i} : {segement:?}");
                 }
             }
-            KeyCode::KeyC if !is_repeat && self.input_helper.shift_is_down() => {
-                println!("Changed control elements mode (C/Shift+C)");
+            KeyCode::KeyC
+                if !is_repeat
+                    && self.input_helper.shift_is_down()
+                    && self.input_helper.control_is_down() =>
+            {
+                println!("Changed control elements mode");
                 self.control_elements_mode = match self.control_elements_mode {
                     ControlElementsMode::All => ControlElementsMode::Minimal,
                     ControlElementsMode::Minimal => ControlElementsMode::None,
                     ControlElementsMode::None => ControlElementsMode::All,
                 }
             }
-            KeyCode::KeyC if !is_repeat => {
-                println!("Changed control elements mode (C/Shift+C)");
+            KeyCode::KeyC if !is_repeat && self.input_helper.control_is_down() => {
+                println!("Changed control elements mode");
                 self.control_elements_mode = match self.control_elements_mode {
                     ControlElementsMode::All => ControlElementsMode::None,
                     ControlElementsMode::Minimal => ControlElementsMode::All,
                     ControlElementsMode::None => ControlElementsMode::Minimal,
                 }
             }
-            KeyCode::KeyL if !is_repeat => {
-                println!("Toggled close path (L)");
+            KeyCode::KeyL if !is_repeat && self.input_helper.control_is_down() => {
+                println!("Toggled close path");
                 self.spline.set_is_closed(!self.spline.is_closed());
             }
             KeyCode::Delete | KeyCode::Backspace => match &mut self.selected_point {
@@ -369,19 +373,12 @@ impl<'cx> Application<'cx> {
                 }
                 _ => (),
             },
-            KeyCode::KeyF if !is_repeat => {
+            KeyCode::KeyF if !is_repeat && self.input_helper.control_is_down() => {
                 let draw_mode = self.spline.draw_mode();
                 self.spline.set_draw_mode(match draw_mode {
                     PathDrawingMode::Line => PathDrawingMode::Fill,
                     PathDrawingMode::Fill => PathDrawingMode::Line,
                 });
-            }
-            KeyCode::Slash if self.input_helper.shift_is_down() => {
-                println!("Keys:");
-                println!("[C/Shift+C]\t: cycle control element modes");
-                println!("[L]\t\t: toggle closed path");
-                println!("[F]\t\t: toggle fill");
-                println!("[backspace]\t: delete");
             }
             _ => (),
         }
@@ -417,6 +414,9 @@ impl<'cx> Application<'cx> {
     }
 
     fn right_click_down(&mut self, position_physical: Point2<f32>) {
+        if self.control_elements_mode == ControlElementsMode::None {
+            return;
+        }
         if let Some(i_selected) = self.selected_point {
             let selected_segment = &mut self.spline.segments_mut()[i_selected.0];
             let selected_point = selected_segment[i_selected.1];
@@ -525,9 +525,7 @@ impl<'cx> Application<'cx> {
     fn frame_resized(&mut self, frame_size: Vector2<f32>) {}
 
     fn scrolled(&mut self, delta_physical: Vector2<f32>) {
-        if delta_physical.x != 0. {
-            self.spline_position += delta_physical;
-        }
+        self.spline_position += delta_physical;
     }
 }
 

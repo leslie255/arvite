@@ -28,6 +28,25 @@ macro_rules! match_into_unchecked {
     };
 }
 
+#[macro_export]
+macro_rules! dbg_unpretty {
+    () => {
+        eprintln!("[{}:{}:{}]", file!(), line!(), column!())
+    };
+    ($val:expr $(,)?) => {
+        match $val {
+            tmp => {
+                eprintln!("[{}:{}:{}] {} = {:?}",
+                    file!(), line!(), column!(), stringify!($val), &tmp);
+                tmp
+            }
+        }
+    };
+    ($($val:expr),+ $(,)?) => {
+        ($($crate::dbg!($val)),+,)
+    };
+}
+
 pub trait BoolToggle {
     fn toggle(&mut self);
 }
@@ -216,6 +235,7 @@ pub fn generator<T>(
 #[macro_export]
 macro_rules! generator {
     {$($stmts:stmt)*} => {{
-        $crate::utils::generator(#[coroutine] || {$($stmts)*})
+        #[allow(redundant_semicolons)]
+        $crate::utils::generator(#[coroutine] move || {$($stmts)*})
     }}
 }

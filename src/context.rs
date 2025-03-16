@@ -1,3 +1,5 @@
+use std::fs::File;
+
 use cgmath::*;
 
 use crate::{resource::ResourceLoader, text::AtlasFont};
@@ -9,6 +11,7 @@ pub struct Context {
     pub(crate) shader_rect: glium::Program,
     pub(crate) shader_circle: glium::Program,
     pub(crate) font: AtlasFont,
+    pub(crate) ttf_font_file: File,
     pub(crate) display: glium::Display<glium::glutin::surface::WindowSurface>,
 }
 
@@ -20,6 +23,7 @@ impl Context {
             shader_rect: Self::load_shader(&display, &loader, "shader/rect"),
             shader_circle: Self::load_shader(&display, &loader, "shader/circle"),
             font: Self::load_font(&display, &loader, "font/big_blue_terminal.json"),
+            ttf_font_file: loader.open_file("font/cmunbi.ttf"),
             loader,
             display,
         }
