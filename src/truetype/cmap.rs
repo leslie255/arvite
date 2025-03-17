@@ -66,7 +66,7 @@ pub(crate) struct CmapSubtableFormat4 {
 
 impl CmapSubtableFormat4 {
     pub(crate) fn segments(&self, reader: &ByteReader) -> impl Iterator<Item = CmapFormat4Segment> {
-        generator! {
+        iterator! {
             let mut start_codes = reader.subreader(self.start_code);
             let mut end_codes = reader.subreader(self.end_code);
             let mut id_deltas = reader.subreader(self.id_delta);
@@ -173,8 +173,10 @@ impl CmapTable {
                     let header = reader.read::<CmapSubtableFormat6Header>().unwrap();
                     dbg!(header);
                 }
-                12 => todo!(),
-                _ => println!("unsupported format {format}"),
+                12 => {
+                    println!("unsuppported cmap format 12");
+                },
+                _ => println!("unsupported cmap format {format}"),
             }
         }
         Ok(CmapTable {

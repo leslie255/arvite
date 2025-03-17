@@ -22,6 +22,7 @@ impl Color {
     }
 
     pub const fn lerp(self, other: Color, t: f32) -> Color {
+        // TODO: Make this based on a cylindrical color coordinate for better gradient.
         Color::new(
             self.r * (1. - t) + other.r * t,
             self.g * (1. - t) + other.g * t,

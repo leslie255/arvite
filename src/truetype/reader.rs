@@ -1,6 +1,6 @@
 use font_types::{F2Dot14, FWord, Fixed, LongDateTime, UfWord};
 
-use crate::generator;
+use crate::iterator;
 
 /// I'm not a big fan of this design. Might change later.
 /// This seemed like an OK thing at the time of designing.
@@ -108,7 +108,7 @@ impl<'a> ByteReader<'a> {
     }
 
     pub(crate) fn read_multiple<T: ReadFrom>(&mut self, n: usize) -> impl Iterator<Item = T> {
-        generator! {
+        iterator! {
             for _ in 0..n {
                 if let Some(x) = self.read::<T>() {
                     yield x;

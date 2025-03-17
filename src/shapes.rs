@@ -7,7 +7,7 @@ use crate::{
     bezier,
     color::Color,
     context::Context,
-    generator, match_into_unchecked,
+    iterator, match_into_unchecked,
     mesh::{self, Mesh},
 };
 
@@ -132,7 +132,7 @@ impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
 
     /// Iterator through every cubic beziers that makes up this spline.
     pub fn cubics(&self) -> impl Iterator<Item = [Point2<f32>; 4]> {
-        generator! {
+        iterator! {
             for &[this, next] in self.segments().array_windows::<2>() {
                 yield [this[1], this[2], next[0], next[1]];
             }

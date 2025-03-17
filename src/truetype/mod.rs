@@ -22,7 +22,7 @@ use std::{
     io::{self, BufReader, Read},
 };
 
-use crate::{generator, impl_read_from};
+use crate::{iterator, impl_read_from};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OffsetSubtable {

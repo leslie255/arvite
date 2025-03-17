@@ -43,7 +43,7 @@ macro_rules! dbg_unpretty {
         }
     };
     ($($val:expr),+ $(,)?) => {
-        ($($crate::dbg!($val)),+,)
+        ($(dbg!($val)),+,)
     };
 }
 
@@ -233,7 +233,7 @@ pub fn generator<T>(
 }
 
 #[macro_export]
-macro_rules! generator {
+macro_rules! iterator {
     {$($stmts:stmt)*} => {{
         #[allow(redundant_semicolons)]
         $crate::utils::generator(#[coroutine] move || {$($stmts)*})

@@ -1,6 +1,9 @@
 // This is very much speghetti code since I intended it to be a very simple testing code at first.
 
-use std::time::{Duration, Instant};
+use std::{
+    fs::File,
+    time::{Duration, Instant},
+};
 
 use cgmath::*;
 use glium::{
@@ -17,9 +20,9 @@ use crate::{
     context::Context,
     input::InputHelper,
     shapes::{BezierSplinePath, Circle, Path, PathDrawingMode},
-    svg::SvgPathBuilder,
     text::Line,
-    truetype::{TrueTypeFont, glyf::Contour},
+    truetype::{TrueTypeFont, glyf::Curve},
+    utils::BoolToggle,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -90,6 +93,7 @@ pub struct Application<'cx> {
     fps_counter: FpsCounter,
     epoch: Instant,
     control_elements_mode: ControlElementsMode,
+    show_glyph_debug_points: bool,
     selected_point: Option<(usize, usize)>,
     spline_position: Point2<f32>,
     current_char: char,
@@ -110,9 +114,10 @@ impl<'cx> Application<'cx> {
             fps_counter: FpsCounter::new(),
             last_window_event: Instant::now(),
             selected_point: None,
-            spline_position: point2(200., 200.),
+            spline_position: point2(0., 0.),
             epoch: Instant::now(),
             control_elements_mode: ControlElementsMode::None,
+            show_glyph_debug_points: false,
             current_char: 'A',
             font: {
                 let ttf_file = context.ttf_font_file.try_clone().unwrap();
@@ -160,32 +165,32 @@ impl<'cx> Application<'cx> {
     fn set_character(&mut self, char: char) {
         self.current_char = char;
         self.spline.segments_mut().clear();
+        self.selected_point = None;
         let Some(glyph) = self.font.get_glyph(char as u32) else {
             return;
         };
-        let mut builder = SvgPathBuilder::new(&mut self.spline);
         let convert_point = |point: Point2<i16>| -> Point2<f32> {
-            let x = point.x as f32 / 4.;
-            let y = 200. - point.y as f32 / 4.;
+            let x = point.x as f32 / 2.;
+            let y = 200. - point.y as f32 / 2.;
             point2(x, y)
         };
+        let segments = self.spline.segments_mut();
         for contour in glyph.contours() {
-            match contour {
-                Contour::Begin(point) => {
-                    let point = convert_point(point);
-                    builder.command_m(point.x, point.y)
-                }
-                Contour::Linear(point) => {
-                    let point = convert_point(point);
-                    builder.command_l(point.x, point.y)
-                }
-                Contour::Quadratic([point0, point1]) => {
-                    let point0 = convert_point(point0);
-                    let point1 = convert_point(point1);
-                    builder.command_q(point0.x, point0.y, point1.x, point1.y)
-                }
-                Contour::Close => {
-                    builder.command_z();
+            for curve in &contour.curves {
+                match *curve {
+                    Curve::Linear([p0, p1]) => {
+                        let p0 = convert_point(p0);
+                        let p1 = convert_point(p1);
+                        segments.push([[f32::NAN; 2].into(), p0, p0]);
+                        segments.push([p1, p1, [f32::NAN; 2].into()]);
+                    }
+                    Curve::Quadratic([p0, p1, p2]) => {
+                        let p0 = convert_point(p0);
+                        let p1 = convert_point(p1);
+                        let p2 = convert_point(p2);
+                        segments.push([[f32::NAN; 2].into(), p0, p1]);
+                        segments.push([p1, p2, [f32::NAN; 2].into()]);
+                    },
                 }
             }
         }
@@ -197,6 +202,45 @@ impl<'cx> Application<'cx> {
         self.clear_frame(&mut frame);
 
         self.spline.draw(&mut frame, self.spline_position, 1.);
+
+        if self.show_glyph_debug_points {
+            let convert_point = |point: Point2<i16>| -> Point2<f32> {
+                let x = point.x as f32 / 2.;
+                let y = 200. - point.y as f32 / 2.;
+                point2(x, y)
+            };
+            if let Some(glyph) = self.font.get_glyph(self.current_char as u32) {
+                let mut end_points = glyph.end_points.iter().map(|&i| i as usize).peekable();
+                let mut start_points = std::iter::once(0usize)
+                    .chain(glyph.end_points.iter().map(|&i| i as usize + 1))
+                    .peekable();
+                for (i, &point) in glyph.points.iter().enumerate() {
+                    let is_end_point = end_points.next_if_eq(&i).is_some();
+                    let is_start_point = start_points.next_if_eq(&i).is_some();
+                    let color = if point.is_on_curve {
+                        Color::new(1., 0.9, 0.2, 1.)
+                    } else {
+                        Color::new(0.3, 0.7, 1., 1.)
+                    };
+                    let point = convert_point(point.position);
+                    let r = self.fix_point_circles.outer_radius();
+                    let inner_radius = if is_end_point {
+                        0.
+                    } else if is_start_point {
+                        r / 2.
+                    } else {
+                        r - 1.
+                    };
+                    self.fix_point_circles.set_inner_radius(inner_radius);
+                    self.fix_point_circles.uniform_fill(color);
+                    self.fix_point_circles.draw(
+                        &mut frame,
+                        point + self.spline_position.to_vec() - vec2(r, r),
+                        1.,
+                    );
+                }
+            }
+        }
 
         // Knots / control points.
         if self.control_elements_mode != ControlElementsMode::None {
@@ -221,33 +265,6 @@ impl<'cx> Application<'cx> {
 
         self.fps_text.draw(&mut frame, point2(10., 10.));
 
-        let convert_point = |point: Point2<i16>| -> Point2<f32> {
-            let x = point.x as f32 / 4.;
-            let y = 200. - point.y as f32 / 4.;
-            point2(x, y)
-        };
-
-        if let Some(glyph) = self.font.get_glyph(self.current_char as u32) {
-            for &point in &glyph.points {
-                let frame: &mut glium::Frame = &mut frame;
-                let color = if point.is_on_curve {
-                    Color::new(1., 1., 1., 1.)
-                } else {
-                    Color::new(0.3, 0.7, 1., 1.)
-                };
-                let point = convert_point(point.into());
-                let r = self.fix_point_circles.outer_radius();
-                let inner_radius = r - 1.;
-                self.fix_point_circles.set_inner_radius(inner_radius);
-                self.fix_point_circles.uniform_fill(color);
-                self.fix_point_circles.draw(
-                    frame,
-                    point + self.spline_position.to_vec() - vec2(r, r),
-                    1.,
-                );
-            }
-        }
-
         frame.finish().unwrap();
         if let Some(fps) = self.fps_counter.frame() {
             self.fps_text.set_string(format!("FPS: {fps:.3}").into());
@@ -262,30 +279,20 @@ impl<'cx> Application<'cx> {
         if is_selected || self.control_elements_mode == ControlElementsMode::All {
             for (j, &point) in segment.iter().enumerate() {
                 let point_is_selected = self.selected_point.is_some_and(|ij| ij == (i, j));
-                self.draw_point(frame, point, point_is_selected, j == 2);
+                self.draw_point(frame, point, point_is_selected);
             }
             self.draw_control_line(frame, segment);
         } else {
-            self.draw_point(frame, segment[1], false, true);
+            self.draw_point(frame, segment[1], false);
         }
     }
 
-    fn draw_point(
-        &mut self,
-        frame: &mut glium::Frame,
-        point: Point2<f32>,
-        is_selected: bool,
-        is_center: bool,
-    ) {
-        let color = if is_center {
-            Color::new(1., 1., 1., 1.)
-        } else {
-            Color::new(0., 1., 1., 1.)
-        };
+    fn draw_point(&mut self, frame: &mut glium::Frame, point: Point2<f32>, is_selected: bool) {
         let r = self.fix_point_circles.outer_radius();
         let inner_radius = if is_selected { 0.0f32 } else { r - 1. };
         self.fix_point_circles.set_inner_radius(inner_radius);
-        self.fix_point_circles.uniform_fill(color);
+        self.fix_point_circles
+            .uniform_fill(Color::new(1., 1., 1., 1.));
         self.fix_point_circles.draw(
             frame,
             point + self.spline_position.to_vec() - vec2(r, r),
@@ -317,6 +324,8 @@ impl<'cx> Application<'cx> {
         if !self.input_helper.control_is_down()
             && !self.input_helper.alt_is_down()
             && !self.input_helper.super_is_down()
+            && !self.input_helper.key_is_down(KeyCode::Delete)
+            && !self.input_helper.key_is_down(KeyCode::Backspace)
         {
             if let Some(text) = text {
                 for char in text.chars() {
@@ -350,6 +359,10 @@ impl<'cx> Application<'cx> {
                     ControlElementsMode::Minimal => ControlElementsMode::All,
                     ControlElementsMode::None => ControlElementsMode::Minimal,
                 }
+            }
+            KeyCode::KeyE if !is_repeat && self.input_helper.control_is_down() => {
+                println!("Toggled showing glyph debug points");
+                self.show_glyph_debug_points.toggle();
             }
             KeyCode::KeyL if !is_repeat && self.input_helper.control_is_down() => {
                 println!("Toggled close path");
@@ -585,6 +598,24 @@ impl winit::application::ApplicationHandler for Application<'_> {
             }
             winit::event::WindowEvent::CursorEntered { device_id: _ } => {
                 self.input_helper.notify_cursor_entered();
+            }
+            winit::event::WindowEvent::DroppedFile(path) => {
+                let file = match File::open(path) {
+                    Ok(file) => file,
+                    Err(e) => {
+                        eprintln!("unable to open file: {e:?}");
+                        return;
+                    }
+                };
+                let font = match TrueTypeFont::load_from_file(file) {
+                    Ok(font) => font,
+                    Err(e) => {
+                        eprintln!("unable to load file {e:?}");
+                        return;
+                    }
+                };
+                self.font = font;
+                self.set_character(self.current_char);
             }
             _ => (),
         }
