@@ -125,24 +125,6 @@ pub(crate) struct CmapFormat4Segment {
     pub(crate) id_range_offset: u16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CmapSubtableFormat6Header {
-    pub(crate) format: u16,
-    pub(crate) length: u16,
-    pub(crate) language: u16,
-    pub(crate) first_code: u16,
-    pub(crate) entry_count: u16,
-}
-
-impl_read_from!(
-    CmapSubtableFormat6Header,
-    format,
-    length,
-    language,
-    first_code,
-    entry_count,
-);
-
 impl CmapTable {
     /// `reader` should be a sub reader in the range of the cmap.
     pub(crate) fn load(reader: &mut ByteReader) -> Result<Self, TTFontLoadError> {
@@ -157,26 +139,19 @@ impl CmapTable {
         }
         let mut format0_tables = Vec::<CmapSubtableFormat0>::new();
         let mut format4_tables = Vec::<CmapSubtableFormat4>::new();
-        for subtable_header in subtable_headers
-            .iter()
-            .filter(|header| header.platform_id == 0)
-        {
-            reader.goto(subtable_header.offset as usize);
+        for subtable_header in &subtable_headers {
             if subtable_header.platform_id != 0 {
                 continue;
             }
+            reader.goto(subtable_header.offset as usize);
             let format = reader.peek::<u16>().unwrap();
             match format {
                 0 => format0_tables.push(reader.read::<CmapSubtableFormat0>().unwrap()),
                 4 => format4_tables.push(reader.read::<CmapSubtableFormat4>().unwrap()),
-                6 => {
-                    let header = reader.read::<CmapSubtableFormat6Header>().unwrap();
-                    dbg!(header);
-                }
                 12 => {
-                    println!("unsuppported cmap format 12");
-                },
-                _ => println!("unsupported cmap format {format}"),
+                    println!("[WARNING] unsuppported cmap format 12");
+                }
+                _ => println!("[WARNING] unsupported cmap format {format}"),
             }
         }
         Ok(CmapTable {
@@ -187,4 +162,3 @@ impl CmapTable {
         })
     }
 }
-

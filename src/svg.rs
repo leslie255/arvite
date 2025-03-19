@@ -17,30 +17,27 @@ impl<'a, 'cx> SvgPathBuilder<'a, 'cx> {
     }
 
     /// Executes an `M` command.
-    pub fn command_m(&mut self, x: f32, y: f32) {
+    pub fn command_m(&mut self, point: Point2<f32>) {
         if let Some(last_segment) = self.spline.segments_mut().last_mut() {
             last_segment[2] = point2(f32::NAN, f32::NAN);
         }
-        let point = point2(x, y);
         self.spline.segments_mut().push([point, point, point]);
         self.previous_m = self.spline.segments().len() - 1;
     }
 
     /// Executes an `L` command.
-    pub fn command_l(&mut self, x: f32, y: f32) {
-        self.spline.append_linear(point2(x, y));
+    pub fn command_l(&mut self, point: Point2<f32>) {
+        self.spline.append_linear(point);
     }
 
     /// Executes a `Q` command.
-    pub fn command_q(&mut self, x1: f32, y1: f32, x2: f32, y2: f32) {
-        self.spline
-            .append_quadratic([point2(x1, y1), point2(x2, y2)]);
+    pub fn command_q(&mut self, point1: Point2<f32>, point2: Point2<f32>) {
+        self.spline.append_quadratic([point1, point2]);
     }
 
     /// Executes a `C` command.
-    pub fn command_c(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32) {
-        self.spline
-            .append_cubic([point2(x1, y1), point2(x2, y2), point2(x3, y3)]);
+    pub fn command_c(&mut self, point1: Point2<f32>, point2: Point2<f32>, point3: Point2<f32>) {
+        self.spline.append_cubic([point1, point2, point3]);
     }
 
     /// Executes a `Z` command.
@@ -57,33 +54,43 @@ impl<'a, 'cx> SvgPathBuilder<'a, 'cx> {
             };
             match token {
                 "M" => {
-                    self.command_m(
+                    self.command_m(point2(
                         tokens.next().ok_or(())?.parse().map_err(|_| ())?,
                         tokens.next().ok_or(())?.parse().map_err(|_| ())?,
-                    );
+                    ));
                 }
                 "L" => {
-                    self.command_l(
+                    self.command_l(point2(
                         tokens.next().ok_or(())?.parse().map_err(|_| ())?,
                         tokens.next().ok_or(())?.parse().map_err(|_| ())?,
-                    );
+                    ));
                 }
                 "Q" => {
                     self.command_q(
-                        tokens.next().ok_or(())?.parse().map_err(|_| ())?,
-                        tokens.next().ok_or(())?.parse().map_err(|_| ())?,
-                        tokens.next().ok_or(())?.parse().map_err(|_| ())?,
-                        tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                        point2(
+                            tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                            tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                        ),
+                        point2(
+                            tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                            tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                        ),
                     );
                 }
                 "C" => {
                     self.command_c(
-                        tokens.next().ok_or(())?.parse().map_err(|_| ())?,
-                        tokens.next().ok_or(())?.parse().map_err(|_| ())?,
-                        tokens.next().ok_or(())?.parse().map_err(|_| ())?,
-                        tokens.next().ok_or(())?.parse().map_err(|_| ())?,
-                        tokens.next().ok_or(())?.parse().map_err(|_| ())?,
-                        tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                        point2(
+                            tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                            tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                        ),
+                        point2(
+                            tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                            tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                        ),
+                        point2(
+                            tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                            tokens.next().ok_or(())?.parse().map_err(|_| ())?,
+                        ),
                     );
                 }
                 "Z" => {

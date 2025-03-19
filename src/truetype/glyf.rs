@@ -41,7 +41,7 @@ pub(crate) struct GlyphPoint {
     pub(crate) is_on_curve: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Curve {
     Linear([Point2<i16>; 2]),
     Quadratic([Point2<i16>; 3]),
@@ -80,11 +80,11 @@ fn test() {
             is_on_curve: false,
         }
     }
-    let contour = Contour::from_points([
-        on_curve(30, 30),
+    let contour = Contour::from_points(&[
+        off_curve(30, 30),
         on_curve(40, 40),
-        off_curve(50, 50),
-        off_curve(60, 60),
+        on_curve(50, 50),
+        on_curve(60, 60),
         off_curve(70, 70),
     ]);
     for curve in &contour.curves {
@@ -92,35 +92,49 @@ fn test() {
     }
 }
 
+fn middle_point(p0: Point2<i16>, p1: Point2<i16>) -> Point2<i16> {
+    point2((p0.x.wrapping_add(p1.x)) / 2, (p0.y.wrapping_add(p1.y)) / 2)
+}
+
 impl Contour {
-    pub(crate) fn from_points(points: impl IntoIterator<Item = GlyphPoint>) -> Self {
-        let filtered_points = iterator! {
+    pub(crate) fn from_points(points: &[GlyphPoint]) -> Self {
+        let normalized_points = iterator! {
+            let n_points = points.len();
+            if n_points <= 2 {
+                return;
+            }
+            let first_point = points[0];
+            let last_point = points[n_points - 1];
+            if !first_point.is_on_curve && !last_point.is_on_curve {
+                yield GlyphPoint {
+                    position: middle_point(first_point.position, last_point.position),
+                    is_on_curve: true,
+                };
+            }
             let mut points = one_cyclic(points).peekable();
-            while let Some(p0) = points.next() {
-                let Some(&p1) = points.peek() else {
+            while let Some(&p0) = points.next() {
+                let Some(&&p1) = points.peek() else {
                     break;
                 };
                 yield p0;
                 if !p0.is_on_curve && !p1.is_on_curve {
-                    let p0_1 = point2(
-                        (p0.position.x + p1.position.x) / 2,
-                        (p0.position.y + p1.position.y) / 2,
-                    );
                     yield GlyphPoint {
-                        position: p0_1,
+                        position: middle_point(p0.position, p1.position),
                         is_on_curve: true,
                     };
                 }
             }
         };
-        let mut points = one_cyclic(filtered_points).peekable();
+        let mut points = one_cyclic(normalized_points).peekable();
         let mut curves = Vec::new();
         while let Some(p0) = points.next() {
+            // dbg_unpretty!(p0);
             let Some(&p1) = points.peek() else {
                 break;
             };
             if !p1.is_on_curve {
                 points.next();
+                // dbg_unpretty!(p1);
                 let Some(&p2) = points.peek() else {
                     curves.push(Curve::Linear([p0.position, p1.position]));
                     break;
@@ -140,8 +154,9 @@ impl SimpleGlyph {
         let start_points =
             std::iter::once(0usize).chain(self.end_points.iter().map(|&i| i as usize + 1));
         let indices = start_points.zip(end_points);
-        indices.map(|(i_start, i_end)| {
-            Contour::from_points(self.points[i_start..=i_end].iter().copied())
+        indices.filter_map(|(i_start, i_end)| {
+            let points = self.points.get(i_start..=i_end)?;
+            Some(Contour::from_points(points))
         })
     }
 }
@@ -151,6 +166,7 @@ impl ReadFrom for SimpleGlyph {
     fn read_from(reader: &mut ByteReader) -> Option<Self> {
         let header = reader.read::<GlyphHeader>()?;
         if !header.is_simple_glyph() {
+            println!("non-simple glyph not supported");
             return None;
         }
         let mut end_points = Vec::<u16>::with_capacity(2);

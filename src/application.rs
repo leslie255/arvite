@@ -1,11 +1,13 @@
 // This is very much speghetti code since I intended it to be a very simple testing code at first.
 
 use std::{
+    fmt::{self, Debug},
     fs::File,
     time::{Duration, Instant},
 };
 
 use cgmath::*;
+use clipboard::{ClipboardContext, ClipboardProvider};
 use glium::{
     Surface,
     winit::{
@@ -20,6 +22,7 @@ use crate::{
     context::Context,
     input::InputHelper,
     shapes::{BezierSplinePath, Circle, Path, PathDrawingMode},
+    svg::SvgPathBuilder,
     text::Line,
     truetype::{TrueTypeFont, glyf::Curve},
     utils::BoolToggle,
@@ -84,10 +87,10 @@ pub enum ControlElementsMode {
     None,
 }
 
-#[derive(Debug)]
 pub struct Application<'cx> {
     context: &'cx Context,
     window: winit::window::Window,
+    clipboard_context: Option<ClipboardContext>,
     last_window_event: Instant,
     input_helper: InputHelper,
     fps_counter: FpsCounter,
@@ -95,7 +98,7 @@ pub struct Application<'cx> {
     control_elements_mode: ControlElementsMode,
     show_glyph_debug_points: bool,
     selected_point: Option<(usize, usize)>,
-    spline_position: Point2<f32>,
+    canvas_offset: Point2<f32>,
     current_char: char,
     font: TrueTypeFont,
     fps_text: Line<'static, 'cx>,
@@ -105,16 +108,47 @@ pub struct Application<'cx> {
     control_lines: Path<'cx>,
 }
 
+impl Debug for Application<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Application")
+            .field("context", &self.context)
+            .field("window", &self.window)
+            .field("last_window_event", &self.last_window_event)
+            .field("input_helper", &self.input_helper)
+            .field("fps_counter", &self.fps_counter)
+            .field("epoch", &self.epoch)
+            .field("control_elements_mode", &self.control_elements_mode)
+            .field("show_glyph_debug_points", &self.show_glyph_debug_points)
+            .field("selected_point", &self.selected_point)
+            .field("canvas_offset", &self.canvas_offset)
+            .field("current_char", &self.current_char)
+            .field("font", &self.font)
+            .field("fps_text", &self.fps_text)
+            .field("position_text", &self.position_text)
+            .field("spline", &self.spline)
+            .field("fix_point_circles", &self.fix_point_circles)
+            .field("control_lines", &self.control_lines)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'cx> Application<'cx> {
     pub fn new(context: &'cx Context, window: winit::window::Window) -> Self {
         let scale_factor = window.scale_factor() as f32;
         Self {
             window,
+            clipboard_context: match ClipboardProvider::new() {
+                Ok(clipboard_context) => Some(clipboard_context),
+                Err(e) => {
+                    println!("[WARNING] unable to initialize clipboard context: {e:?}");
+                    None
+                }
+            },
             input_helper: InputHelper::new(),
             fps_counter: FpsCounter::new(),
             last_window_event: Instant::now(),
             selected_point: None,
-            spline_position: point2(0., 0.),
+            canvas_offset: point2(0., 0.),
             epoch: Instant::now(),
             control_elements_mode: ControlElementsMode::None,
             show_glyph_debug_points: false,
@@ -140,7 +174,7 @@ impl<'cx> Application<'cx> {
             },
             spline: {
                 let mut spline = BezierSplinePath::new(context);
-                spline.set_resolution(24);
+                spline.set_resolution(32);
                 spline.set_is_closed(false);
                 spline.set_draw_mode(PathDrawingMode::Line);
                 spline.set_color(Color::new(1., 1., 1., 1.));
@@ -174,25 +208,33 @@ impl<'cx> Application<'cx> {
             let y = 200. - point.y as f32 / 2.;
             point2(x, y)
         };
-        let segments = self.spline.segments_mut();
+        let mut builder = SvgPathBuilder::new(&mut self.spline);
         for contour in glyph.contours() {
-            for curve in &contour.curves {
-                match *curve {
+            let mut previous_point = point2(f32::NAN, f32::NAN);
+            for &curve in &contour.curves {
+                match curve {
                     Curve::Linear([p0, p1]) => {
                         let p0 = convert_point(p0);
                         let p1 = convert_point(p1);
-                        segments.push([[f32::NAN; 2].into(), p0, p0]);
-                        segments.push([p1, p1, [f32::NAN; 2].into()]);
+                        if previous_point != p0 {
+                            builder.command_m(p0);
+                        }
+                        builder.command_l(p1);
+                        previous_point = p1;
                     }
                     Curve::Quadratic([p0, p1, p2]) => {
                         let p0 = convert_point(p0);
                         let p1 = convert_point(p1);
                         let p2 = convert_point(p2);
-                        segments.push([[f32::NAN; 2].into(), p0, p1]);
-                        segments.push([p1, p2, [f32::NAN; 2].into()]);
-                    },
+                        if previous_point != p0 {
+                            builder.command_m(p0);
+                        }
+                        builder.command_q(p1, p2);
+                        previous_point = p2;
+                    }
                 }
             }
+            builder.command_z();
         }
     }
 
@@ -201,45 +243,10 @@ impl<'cx> Application<'cx> {
 
         self.clear_frame(&mut frame);
 
-        self.spline.draw(&mut frame, self.spline_position, 1.);
+        self.spline.draw(&mut frame, self.canvas_offset, 1.);
 
         if self.show_glyph_debug_points {
-            let convert_point = |point: Point2<i16>| -> Point2<f32> {
-                let x = point.x as f32 / 2.;
-                let y = 200. - point.y as f32 / 2.;
-                point2(x, y)
-            };
-            if let Some(glyph) = self.font.get_glyph(self.current_char as u32) {
-                let mut end_points = glyph.end_points.iter().map(|&i| i as usize).peekable();
-                let mut start_points = std::iter::once(0usize)
-                    .chain(glyph.end_points.iter().map(|&i| i as usize + 1))
-                    .peekable();
-                for (i, &point) in glyph.points.iter().enumerate() {
-                    let is_end_point = end_points.next_if_eq(&i).is_some();
-                    let is_start_point = start_points.next_if_eq(&i).is_some();
-                    let color = if point.is_on_curve {
-                        Color::new(1., 0.9, 0.2, 1.)
-                    } else {
-                        Color::new(0.3, 0.7, 1., 1.)
-                    };
-                    let point = convert_point(point.position);
-                    let r = self.fix_point_circles.outer_radius();
-                    let inner_radius = if is_end_point {
-                        0.
-                    } else if is_start_point {
-                        r / 2.
-                    } else {
-                        r - 1.
-                    };
-                    self.fix_point_circles.set_inner_radius(inner_radius);
-                    self.fix_point_circles.uniform_fill(color);
-                    self.fix_point_circles.draw(
-                        &mut frame,
-                        point + self.spline_position.to_vec() - vec2(r, r),
-                        1.,
-                    );
-                }
-            }
+            self.draw_glyph_debug_points(&mut frame);
         }
 
         // Knots / control points.
@@ -259,7 +266,7 @@ impl<'cx> Application<'cx> {
                 .set_string(format!("{:.3} {:.3}", selected_point.x, selected_point.y).into());
             self.position_text.draw(
                 &mut frame,
-                selected_point + vec2(8., 8.) * scale_factor + self.spline_position.to_vec(),
+                selected_point + vec2(8., 8.) * scale_factor + self.canvas_offset.to_vec(),
             );
         }
 
@@ -293,11 +300,8 @@ impl<'cx> Application<'cx> {
         self.fix_point_circles.set_inner_radius(inner_radius);
         self.fix_point_circles
             .uniform_fill(Color::new(1., 1., 1., 1.));
-        self.fix_point_circles.draw(
-            frame,
-            point + self.spline_position.to_vec() - vec2(r, r),
-            1.,
-        );
+        self.fix_point_circles
+            .draw(frame, point + self.canvas_offset.to_vec() - vec2(r, r), 1.);
     }
 
     fn draw_control_line(&mut self, frame: &mut glium::Frame, segment: [Point2<f32>; 3]) {
@@ -308,7 +312,51 @@ impl<'cx> Application<'cx> {
             .push_point(segment[1], Color::new(0.5, 0.5, 0.5, 1.));
         self.control_lines
             .push_point(segment[2], Color::new(0.5, 0.5, 0.5, 1.));
-        self.control_lines.draw(frame, self.spline_position, 1.);
+        self.control_lines.draw(frame, self.canvas_offset, 1.);
+    }
+
+    fn draw_glyph_debug_points(&mut self, frame: &mut glium::Frame) {
+        let convert_point = |point: Point2<i16>| -> Point2<f32> {
+            let x = point.x as f32 / 2.;
+            let y = 200. - point.y as f32 / 2.;
+            point2(x, y)
+        };
+        let point_color = |is_on_curve| {
+            if is_on_curve {
+                Color::new(1., 0.9, 0.2, 1.)
+            } else {
+                Color::new(0.3, 0.7, 1., 1.)
+            }
+        };
+        let inner_radius = |outer_radius, is_start_point, is_end_point| {
+            if is_end_point {
+                0.
+            } else if is_start_point {
+                outer_radius / 2.
+            } else {
+                outer_radius - 1.
+            }
+        };
+        if let Some(glyph) = self.font.get_glyph(self.current_char as u32) {
+            let mut end_points = glyph.end_points.iter().map(|&i| i as usize).peekable();
+            let mut start_points = std::iter::once(0usize)
+                .chain(glyph.end_points.iter().map(|&i| i as usize + 1))
+                .peekable();
+            for (i, &point) in glyph.points.iter().enumerate() {
+                let is_end_point = end_points.next_if_eq(&i).is_some();
+                let is_start_point = start_points.next_if_eq(&i).is_some();
+                let color = point_color(point.is_on_curve);
+                let r = self.fix_point_circles.outer_radius();
+                let inner_radius = inner_radius(r, is_start_point, is_end_point);
+                self.fix_point_circles.set_inner_radius(inner_radius);
+                self.fix_point_circles.uniform_fill(color);
+                self.fix_point_circles.draw(
+                    frame,
+                    convert_point(point.position).sub_element_wise(r) + self.canvas_offset.to_vec(),
+                    1.,
+                );
+            }
+        }
     }
 
     fn clear_frame(&mut self, frame: &mut glium::Frame) {
@@ -358,6 +406,18 @@ impl<'cx> Application<'cx> {
                     ControlElementsMode::All => ControlElementsMode::None,
                     ControlElementsMode::Minimal => ControlElementsMode::All,
                     ControlElementsMode::None => ControlElementsMode::Minimal,
+                }
+            }
+            KeyCode::KeyV if self.input_helper.control_is_down() => {
+                println!("Pasted");
+                let clipboard_content = self
+                    .clipboard_context
+                    .as_mut()
+                    .and_then(|clipboard_context| clipboard_context.get_contents().ok());
+                if let Some(string) = clipboard_content {
+                    for char in string.chars() {
+                        self.set_character(char);
+                    }
                 }
             }
             KeyCode::KeyE if !is_repeat && self.input_helper.control_is_down() => {
@@ -411,7 +471,7 @@ impl<'cx> Application<'cx> {
                     _ => &[0usize, 2, 1],
                 };
                 for &j in js {
-                    let point = segment[j] + self.spline_position.to_vec();
+                    let point = segment[j] + self.canvas_offset.to_vec();
                     let r = self.fix_point_circles.outer_radius();
                     let is_preivously_selected =
                         previous_selected_point.is_some_and(|prev| prev == (i, j));
@@ -433,11 +493,10 @@ impl<'cx> Application<'cx> {
         if let Some(i_selected) = self.selected_point {
             let selected_segment = &mut self.spline.segments_mut()[i_selected.0];
             let selected_point = selected_segment[i_selected.1];
-            let distance =
-                position_physical.distance(selected_point + self.spline_position.to_vec());
+            let distance = position_physical.distance(selected_point + self.canvas_offset.to_vec());
             let r = self.fix_point_circles.outer_radius();
             if distance > r * 2. {
-                let new_segment_position = position_physical - self.spline_position.to_vec();
+                let new_segment_position = position_physical - self.canvas_offset.to_vec();
                 self.spline
                     .segments_mut()
                     .insert(i_selected.0, [new_segment_position; 3]);
@@ -451,7 +510,7 @@ impl<'cx> Application<'cx> {
                 }
             }
         } else {
-            let new_segment_position = position_physical - self.spline_position.to_vec();
+            let new_segment_position = position_physical - self.canvas_offset.to_vec();
             self.spline.segments_mut().push([new_segment_position; 3]);
             self.selected_point = Some((self.spline.segments().len() - 1, 1));
         }
@@ -469,13 +528,13 @@ impl<'cx> Application<'cx> {
         if i_selected.1 == 1 {
             let v0 = selected_segment[0] - selected_segment[1];
             let v2 = selected_segment[2] - selected_segment[1];
-            selected_segment[1] = position_physical - self.spline_position.to_vec();
+            selected_segment[1] = position_physical - self.canvas_offset.to_vec();
             if !self.input_helper.alt_is_down() {
                 selected_segment[0] = selected_segment[1] + v0;
                 selected_segment[2] = selected_segment[1] + v2;
             }
         } else {
-            selected_segment[i_selected.1] = position_physical - self.spline_position.to_vec();
+            selected_segment[i_selected.1] = position_physical - self.canvas_offset.to_vec();
             let selected_point = selected_segment[i_selected.1];
             if !self.input_helper.alt_is_down() {
                 let center_point = selected_segment[1];
@@ -503,7 +562,7 @@ impl<'cx> Application<'cx> {
         delta_physical: Vector2<f32>,
         _position_physical: Point2<f32>,
     ) {
-        self.spline_position += delta_physical;
+        self.canvas_offset += delta_physical;
     }
 
     fn mouse_down(&mut self, button: u32) {
@@ -538,7 +597,7 @@ impl<'cx> Application<'cx> {
     fn frame_resized(&mut self, frame_size: Vector2<f32>) {}
 
     fn scrolled(&mut self, delta_physical: Vector2<f32>) {
-        self.spline_position += delta_physical;
+        self.canvas_offset += delta_physical;
     }
 }
 
