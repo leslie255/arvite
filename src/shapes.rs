@@ -15,6 +15,76 @@ fn point_is_nan(point: Point2<f32>) -> bool {
     point.x.is_nan() && point.y.is_nan()
 }
 
+/// Vertex used for `Rect` and `Path`s.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Vertex {
+    pub(crate) position: [f32; 2],
+}
+
+impl Vertex {
+    pub(crate) const fn new(position: [f32; 2]) -> Self {
+        Self { position }
+    }
+}
+
+glium::implement_vertex!(Vertex, position);
+
+#[derive(Debug)]
+pub(crate) struct SDFTest<'cx> {
+    pub(crate) mesh: Mesh<'cx, Vertex>,
+}
+
+impl<'cx> SDFTest<'cx> {
+    pub(crate) fn new(context: &'cx Context) -> Self {
+        let mut self_ = Self {
+            mesh: Mesh::new(context),
+        };
+        self_.rebuild_mesh_data();
+        self_
+    }
+
+    pub(crate) fn context(&self) -> &'cx Context {
+        self.mesh.context()
+    }
+
+    pub(crate) fn rebuild_mesh_data(&mut self) {
+        let (vertices, indices) = self.mesh.vertices_indices_mut();
+        vertices.clear();
+        vertices.extend_from_slice(&[
+            Vertex::new([0., 1000.]),
+            Vertex::new([1000., 0.]),
+            Vertex::new([1000., 1000.]),
+            Vertex::new([0., 0.]),
+        ]);
+        indices.clear();
+        indices.extend_from_slice(&[0, 1, 2, 1, 0, 3]);
+    }
+
+    pub(crate) fn draw(&mut self, frame: &mut glium::Frame, model: Matrix4<f32>) {
+        self.mesh.update_if_needed();
+        let (frame_width, frame_height) = frame.get_dimensions();
+        let (frame_width, frame_height) = (frame_width as f32, frame_height as f32);
+        let model_view = model;
+        let projection = cgmath::ortho(
+            -frame_width / 2.,
+            frame_width / 2.,
+            frame_height / 2.,
+            -frame_height / 2.,
+            -1.,
+            1.,
+        );
+        self.mesh.draw(
+            frame,
+            glium::uniform! {
+                model_view: mesh::matrix4_to_array(model_view),
+                projection: mesh::matrix4_to_array(projection),
+            },
+            &self.context().shader_sdf_rect,
+            &mesh::default_2d_draw_parameters(),
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathDrawingMode {
     Line,
@@ -24,8 +94,8 @@ pub enum PathDrawingMode {
 /// Vertex used for `Rect` and `Path`s.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ColoredVertex {
-    pub position: [f32; 2],
-    pub color: [f32; 4],
+    pub(crate) position: [f32; 2],
+    pub(crate) color: [f32; 4],
 }
 
 glium::implement_vertex!(ColoredVertex, position, color);
@@ -186,9 +256,9 @@ impl<'a, 'cx> BezierSplinePath<'a, 'cx> {
         self.path = path;
     }
 
-    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>, scale: f32) {
+    pub fn draw(&mut self, frame: &mut glium::Frame, model: Matrix4<f32>) {
         self.rebuild_mesh_if_needed();
-        self.path.draw(frame, position, scale)
+        self.path.draw(frame, model)
     }
 
     pub fn draw_mode(&self) -> PathDrawingMode {
@@ -281,9 +351,9 @@ impl<'a, 'cx> BezierPath<'a, 'cx> {
         }
     }
 
-    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>, scale: f32) {
+    pub fn draw(&mut self, frame: &mut glium::Frame, model: Matrix4<f32>) {
         self.rebuild_mesh_if_needed();
-        self.path.draw(frame, position, scale)
+        self.path.draw(frame, model)
     }
 
     pub fn draw_mode(&self) -> PathDrawingMode {
@@ -353,7 +423,7 @@ impl<'cx> Path<'cx> {
         self.mesh.vertices().len()
     }
 
-    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>, scale: f32) {
+    pub fn draw(&mut self, frame: &mut glium::Frame, model: Matrix4<f32>) {
         self.mesh.update_if_needed();
         let (polygon_mode, line_width) = match self.draw_mode() {
             _ if self.n_points() <= 1 => return,
@@ -361,9 +431,16 @@ impl<'cx> Path<'cx> {
             PathDrawingMode::Fill => (glium::PolygonMode::Fill, None),
         };
         let (frame_width, frame_height) = frame.get_dimensions();
-        let model_view = Matrix4::from_translation(Vector3::new(position.x, position.y, 0.))
-            * Matrix4::from_scale(scale);
-        let projection = cgmath::ortho(0., frame_width as f32, frame_height as f32, 0., -1., 1.);
+        let (frame_width, frame_height) = (frame_width as f32, frame_height as f32);
+        let projection = cgmath::ortho(
+            -frame_width / 2.,
+            frame_width / 2.,
+            frame_height / 2.,
+            -frame_height / 2.,
+            -1.,
+            1.,
+        );
+        let model_view = model;
         self.mesh.draw(
             frame,
             glium::uniform! {
@@ -432,7 +509,7 @@ impl<'cx> Circle<'cx> {
         self.outer_radius
     }
 
-    pub fn rebuild_mesh_data(&mut self) {
+    pub(crate) fn rebuild_mesh_data(&mut self) {
         let rect_size = self.outer_radius * 2.;
         let vertices_data = [
             CircleVertex {
@@ -464,15 +541,22 @@ impl<'cx> Circle<'cx> {
         indices.extend_from_slice(&indices_data);
     }
 
-    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>, scale: f32) {
+    pub fn draw(&mut self, frame: &mut glium::Frame, model: Matrix4<f32>) {
         if self.fill_color.a.is_zero() {
             return;
         }
         self.mesh.update_if_needed();
+        let model_view = model;
         let (frame_width, frame_height) = frame.get_dimensions();
-        let model_view = Matrix4::from_translation(vec3(position.x, position.y, 0.))
-            * Matrix4::from_scale(scale);
-        let projection = cgmath::ortho(0., frame_width as f32, frame_height as f32, 0., -1., 1.);
+        let (frame_width, frame_height) = (frame_width as f32, frame_height as f32);
+        let projection = cgmath::ortho(
+            -frame_width / 2.,
+            frame_width / 2.,
+            frame_height / 2.,
+            -frame_height / 2.,
+            -1.,
+            1.,
+        );
         self.mesh.draw(
             frame,
             glium::uniform! {
@@ -553,16 +637,23 @@ impl<'cx> Rect<'cx> {
         self.set_fill_color(RectFillColor::GradientVertical(color_top, color_bottom));
     }
 
-    pub fn draw(&mut self, frame: &mut glium::Frame, position: Point2<f32>, scale: f32) {
+    pub fn draw(&mut self, frame: &mut glium::Frame, model: Matrix4<f32>) {
         match self.fill_color {
             RectFillColor::Uniform(color) if color.a.is_zero() => return,
             _ => (),
         }
         self.mesh.update_if_needed();
         let (frame_width, frame_height) = frame.get_dimensions();
-        let model_view = Matrix4::from_translation(vec3(position.x, position.y, 0.))
-            * Matrix4::from_scale(scale);
-        let projection = cgmath::ortho(0., frame_width as f32, frame_height as f32, 0., -1., 1.);
+        let (frame_width, frame_height) = (frame_width as f32, frame_height as f32);
+        let model_view = model;
+        let projection = cgmath::ortho(
+            -frame_width / 2.,
+            frame_width / 2.,
+            frame_height / 2.,
+            -frame_height / 2.,
+            -1.,
+            1.,
+        );
         self.mesh.draw(
             frame,
             glium::uniform! {

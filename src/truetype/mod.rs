@@ -3,6 +3,7 @@
 pub(crate) mod cmap;
 pub(crate) mod glyf;
 pub(crate) mod head;
+pub(crate) mod hhea;
 pub(crate) mod loca;
 pub(crate) mod maxp;
 pub(crate) mod reader;
@@ -10,19 +11,21 @@ pub(crate) mod reader;
 use cmap::*;
 use glyf::*;
 use head::*;
+use hhea::*;
 use loca::*;
 use maxp::*;
 
 use reader::*;
 
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     fmt::{self, Debug},
     fs::File,
     io::{self, BufReader, Read},
 };
 
-use crate::{iterator, impl_read_from};
+use crate::{impl_read_from, iterator};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OffsetSubtable {
@@ -96,13 +99,11 @@ impl Debug for TableHeader {
 pub enum TTFontLoadError {
     MalformedHeader,
     IoError(io::Error),
-    TableOutOfRange(String),
-    MissingRequiredTable(String),
-    MalformedCmap,
+    TableOutOfRange(Cow<'static, str>),
+    MissingTable(Cow<'static, str>),
     UnsupportedFeature,
-    MalformedHeadTable,
+    MalformedTable(Cow<'static, str>),
     BitmapFontIsNotSupported,
-    MalformedLoca,
 }
 
 #[derive(Clone)]
@@ -114,6 +115,7 @@ pub struct TrueTypeFont {
     pub(crate) maxp_table: Option<MaxpTable>,
     pub(crate) cmap_table: Option<CmapTable>,
     pub(crate) loca_table: Option<LocaTable>,
+    pub(crate) hhea_table: Option<HheaTable>,
 }
 
 impl Debug for TrueTypeFont {
@@ -156,50 +158,65 @@ impl TrueTypeFont {
             maxp_table: None,
             cmap_table: None,
             loca_table: None,
+            hhea_table: None,
         };
         font.load_head()?;
         font.load_maxp()?;
         font.load_cmap()?;
         font.load_loca()?;
+        font.load_hhea()?;
+        dbg!(font.head_table());
+        dbg!(font.hhea_table());
         Ok(font)
     }
 
     pub(crate) fn load_cmap(&mut self) -> Result<(), TTFontLoadError> {
-        let cmap_data = self
-            .get_table_data(b"cmap")
-            .ok_or(TTFontLoadError::MissingRequiredTable("cmap".into()))?;
-        let mut reader = ByteReader::new(&self.data).subreader(cmap_data);
+        let mut reader = self
+            .get_subreader_for_table(b"cmap")
+            .ok_or(TTFontLoadError::MissingTable("cmap".into()))?;
         self.cmap_table = Some(CmapTable::load(&mut reader)?);
         Ok(())
     }
 
     pub(crate) fn load_head(&mut self) -> Result<(), TTFontLoadError> {
-        let head_data = self
-            .get_table_data(b"head")
+        let mut reader = self
+            .get_subreader_for_table(b"head")
             .ok_or(TTFontLoadError::BitmapFontIsNotSupported)?;
-        let mut reader = ByteReader::new(&self.data).subreader(head_data);
-        self.head_table = Some(reader.read().ok_or(TTFontLoadError::MalformedHeadTable)?);
+        let head_table = reader
+            .read()
+            .ok_or(TTFontLoadError::MalformedTable("head".into()))?;
+        self.head_table = Some(head_table);
         Ok(())
     }
 
     pub(crate) fn load_maxp(&mut self) -> Result<(), TTFontLoadError> {
-        let maxp_data = self
-            .get_table_data(b"maxp")
-            .ok_or(TTFontLoadError::MissingRequiredTable("maxp".into()))?;
-        let mut reader = ByteReader::new(&self.data).subreader(maxp_data);
-        self.maxp_table = Some(reader.read().ok_or(TTFontLoadError::MalformedHeadTable)?);
+        let mut reader = self
+            .get_subreader_for_table(b"maxp")
+            .ok_or(TTFontLoadError::MissingTable("maxp".into()))?;
+        let maxp_table = reader
+            .read()
+            .ok_or(TTFontLoadError::MalformedTable("maxp".into()))?;
+        self.maxp_table = Some(maxp_table);
         Ok(())
     }
 
     pub(crate) fn load_loca(&mut self) -> Result<(), TTFontLoadError> {
-        let loca_data = self
-            .get_table_data(b"loca")
-            .ok_or(TTFontLoadError::MissingRequiredTable("loca".into()))?;
-        let mut reader = ByteReader::new(&self.data).subreader(loca_data);
-        self.loca_table = Some(
-            LocaTable::load(&mut reader, self.maxp_table(), self.head_table())
-                .ok_or(TTFontLoadError::MalformedLoca)?,
-        );
+        let mut reader = self
+            .get_subreader_for_table(b"loca")
+            .ok_or(TTFontLoadError::MissingTable("loca".into()))?;
+        let loca_table = LocaTable::load(&mut reader, self.maxp_table(), self.head_table())
+            .ok_or(TTFontLoadError::MalformedTable("loca".into()))?;
+        self.loca_table = Some(loca_table);
+        Ok(())
+    }
+
+    pub(crate) fn load_hhea(&mut self) -> Result<(), TTFontLoadError> {
+        let mut reader = self
+            .get_subreader_for_table(b"loca")
+            .ok_or(TTFontLoadError::MissingTable("loca".into()))?;
+        let hhea_table = HheaTable::read_from(&mut reader)
+            .ok_or(TTFontLoadError::MalformedTable("hhea".into()))?;
+        self.hhea_table = Some(hhea_table);
         Ok(())
     }
 
@@ -221,6 +238,14 @@ impl TrueTypeFont {
         Some(BytesRef { offset, length })
     }
 
+    pub(crate) fn get_subreader_for_table<'a>(
+        &'a self,
+        name: &(impl Into<TableHeader> + Copy),
+    ) -> Option<ByteReader<'a>> {
+        let table_data = self.get_table_data(name)?;
+        Some(ByteReader::new(&self.data).subreader(table_data))
+    }
+
     pub(crate) fn cmap_table(&self) -> &CmapTable {
         self.cmap_table.as_ref().unwrap()
     }
@@ -235,6 +260,10 @@ impl TrueTypeFont {
 
     pub(crate) fn loca_table(&self) -> &LocaTable {
         self.loca_table.as_ref().unwrap()
+    }
+
+    pub(crate) fn hhea_table(&self) -> &HheaTable {
+        self.hhea_table.as_ref().unwrap()
     }
 
     pub(crate) fn search_glyph_index(&self, codepoint: u16) -> u16 {

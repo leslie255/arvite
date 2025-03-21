@@ -9,6 +9,7 @@ pub struct Context {
     pub(crate) loader: ResourceLoader,
     pub(crate) shader_text: glium::Program,
     pub(crate) shader_rect: glium::Program,
+    pub(crate) shader_sdf_rect: glium::Program,
     pub(crate) shader_circle: glium::Program,
     pub(crate) font: AtlasFont,
     pub(crate) ttf_font_file: File,
@@ -21,6 +22,7 @@ impl Context {
         Self {
             shader_text: Self::load_shader(&display, &loader, "shader/text"),
             shader_rect: Self::load_shader(&display, &loader, "shader/rect"),
+            shader_sdf_rect: Self::load_shader(&display, &loader, "shader/sdf_rect"),
             shader_circle: Self::load_shader(&display, &loader, "shader/circle"),
             font: Self::load_font(&display, &loader, "font/big_blue_terminal.json"),
             ttf_font_file: loader.open_file("font/cmunbi.ttf"),

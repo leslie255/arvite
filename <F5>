@@ -21,11 +21,12 @@ use glium::{
 use crate::{
     color::Color,
     context::Context,
+    dbg_unpretty,
     input::InputHelper,
-    shapes::{BezierSplinePath, Path, PathDrawingMode, SDFTest},
+    shapes::{BezierSplinePath, Path, PathDrawingMode},
     svg::SvgPathBuilder,
     text::Line,
-    truetype::{glyf::Curve, TrueTypeFont},
+    truetype::{TrueTypeFont, glyf::Curve},
     utils::BoolToggle,
 };
 
@@ -345,9 +346,6 @@ impl<'cx> Application<'cx> {
             );
         }
 
-        let mut sdf_test = SDFTest::new(self.context);
-        sdf_test.draw(&mut frame, self.canvas.model(point2(0., 0.)));
-
         frame.finish().unwrap();
         if let Some(fps) = self.fps_counter.frame() {
             self.fps_text.set_string(format!("FPS: {fps:.3}").into());
@@ -596,6 +594,13 @@ impl winit::application::ApplicationHandler for Application<'_> {
                 delta,
                 phase: _,
             } => {
+                let position = self
+                    .input_helper
+                    .cursor_position_physical()
+                    .map(|p| p - self.context.display_size() / 2.)
+                    .unwrap_or(point2(0., 0.));
+                dbg_unpretty!(position);
+                self.canvas.move_(-position.to_vec() * self.canvas.physical_scale());
                 self.canvas.scale(delta as f32);
             }
             winit::event::WindowEvent::CursorLeft { device_id: _ } => {

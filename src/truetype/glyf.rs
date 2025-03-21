@@ -96,45 +96,59 @@ fn middle_point(p0: Point2<i16>, p1: Point2<i16>) -> Point2<i16> {
     point2((p0.x.wrapping_add(p1.x)) / 2, (p0.y.wrapping_add(p1.y)) / 2)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NormalizedPoint {
+    pub(crate) position: Point2<i16>,
+    pub(crate) is_on_curve: bool,
+    pub(crate) is_implicit: bool,
+}
+
+pub(crate) fn normalized_points(points: &[GlyphPoint]) -> impl Iterator<Item = NormalizedPoint> {
+    iterator! {
+        let n_points = points.len();
+        if n_points <= 2 {
+            return;
+        }
+        let first_point = points[0];
+        let last_point = points[n_points - 1];
+        if !first_point.is_on_curve && !last_point.is_on_curve {
+            yield NormalizedPoint {
+                position: middle_point(first_point.position, last_point.position),
+                is_on_curve: true,
+                is_implicit: true,
+            };
+        }
+        let mut points = one_cyclic(points).peekable();
+        while let Some(&p0) = points.next() {
+            let Some(&&p1) = points.peek() else {
+                break;
+            };
+            yield NormalizedPoint {
+                position: p0.position,
+                is_on_curve: p0.is_on_curve,
+                is_implicit: false,
+            };
+            if !p0.is_on_curve && !p1.is_on_curve {
+                yield NormalizedPoint {
+                    position: middle_point(p0.position, p1.position),
+                    is_on_curve: true,
+                    is_implicit: true,
+                };
+            }
+        }
+    }
+}
+
 impl Contour {
     pub(crate) fn from_points(points: &[GlyphPoint]) -> Self {
-        let normalized_points = iterator! {
-            let n_points = points.len();
-            if n_points <= 2 {
-                return;
-            }
-            let first_point = points[0];
-            let last_point = points[n_points - 1];
-            if !first_point.is_on_curve && !last_point.is_on_curve {
-                yield GlyphPoint {
-                    position: middle_point(first_point.position, last_point.position),
-                    is_on_curve: true,
-                };
-            }
-            let mut points = one_cyclic(points).peekable();
-            while let Some(&p0) = points.next() {
-                let Some(&&p1) = points.peek() else {
-                    break;
-                };
-                yield p0;
-                if !p0.is_on_curve && !p1.is_on_curve {
-                    yield GlyphPoint {
-                        position: middle_point(p0.position, p1.position),
-                        is_on_curve: true,
-                    };
-                }
-            }
-        };
-        let mut points = one_cyclic(normalized_points).peekable();
+        let mut points = one_cyclic(normalized_points(points)).peekable();
         let mut curves = Vec::new();
         while let Some(p0) = points.next() {
-            // dbg_unpretty!(p0);
             let Some(&p1) = points.peek() else {
                 break;
             };
             if !p1.is_on_curve {
                 points.next();
-                // dbg_unpretty!(p1);
                 let Some(&p2) = points.peek() else {
                     curves.push(Curve::Linear([p0.position, p1.position]));
                     break;
@@ -195,41 +209,8 @@ impl ReadFrom for SimpleGlyph {
             flags
         };
 
-        let mut x_coordinates = Vec::<i16>::with_capacity(n_points);
-        for flag in &flags {
-            let previous_x = x_coordinates.last().copied().unwrap_or(0);
-            let is_same_as_previous = !flag.x_short() && flag.x_is_same();
-            let dx = if is_same_as_previous {
-                0
-            } else if flag.x_short() {
-                let mut x = reader.read::<u8>()? as i16;
-                if !flag.x_is_same() {
-                    x = -x;
-                }
-                x
-            } else {
-                reader.read::<i16>()?
-            };
-            x_coordinates.push(previous_x.wrapping_add(dx));
-        }
-
-        let mut y_coordinates = Vec::<i16>::with_capacity(n_points);
-        for flag in &flags {
-            let previous_y = y_coordinates.last().copied().unwrap_or(0);
-            let is_same_as_previous = !flag.y_short() && flag.y_is_same();
-            let dy = if is_same_as_previous {
-                0
-            } else if flag.y_short() {
-                let mut y = reader.read::<u8>()? as i16;
-                if !flag.y_is_same() {
-                    y = -y;
-                }
-                y
-            } else {
-                reader.read::<i16>()?
-            };
-            y_coordinates.push(previous_y.wrapping_add(dy));
-        }
+        let x_coordinates = read_coordinates(reader, &flags, Axis::X)?;
+        let y_coordinates = read_coordinates(reader, &flags, Axis::Y)?;
 
         let points: Vec<_> = flags
             .into_iter()
@@ -249,6 +230,38 @@ impl ReadFrom for SimpleGlyph {
             points,
         })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    X,
+    Y
+}
+
+fn read_coordinates(reader: &mut ByteReader, flags: &[GlyphFlagByte], axis: Axis) -> Option<Vec<i16>> {
+    let n_points = flags.len();
+    let mut coordinates = Vec::<i16>::with_capacity(n_points);
+    for flag in flags {
+        let (is_short, is_same) = match axis {
+            Axis::X => (flag.x_short(), flag.x_is_same()),
+            Axis::Y => (flag.y_short(), flag.y_is_same()),
+        };
+        let previous_x = coordinates.last().copied().unwrap_or(0);
+        let is_same_as_previous = !is_short && is_same;
+        let dx = if is_same_as_previous {
+            0
+        } else if is_short {
+            let mut x = reader.read::<u8>()? as i16;
+            if !is_same {
+                x = -x;
+            }
+            x
+        } else {
+            reader.read::<i16>()?
+        };
+        coordinates.push(previous_x.wrapping_add(dx));
+    }
+    Some(coordinates)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

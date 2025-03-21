@@ -239,3 +239,7 @@ macro_rules! iterator {
         $crate::utils::generator(#[coroutine] move || {$($stmts)*})
     }}
 }
+
+pub fn extend_matrix(mat3: Matrix3<f32>) -> Matrix4<f32> {
+    mat3.into()
+}

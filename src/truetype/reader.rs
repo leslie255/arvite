@@ -1,3 +1,5 @@
+use std::{mem::MaybeUninit, ptr::copy_nonoverlapping};
+
 use font_types::{F2Dot14, FWord, Fixed, LongDateTime, UfWord};
 
 use crate::iterator;
@@ -46,7 +48,7 @@ impl<'a> ByteReader<'a> {
             self.cursor += N;
             let mut array = [0u8; N];
             unsafe {
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), array.as_mut_ptr(), N);
+                copy_nonoverlapping(bytes.as_ptr(), array.as_mut_ptr(), N);
             }
             Some(array)
         } else {
@@ -66,7 +68,6 @@ impl<'a> ByteReader<'a> {
             None
         }
     }
-
 
     #[track_caller]
     pub(crate) fn subreader(&self, bytes_ref: BytesRef) -> ByteReader<'a> {
@@ -220,5 +221,20 @@ impl ReadFrom for Fixed {
 impl ReadFrom for LongDateTime {
     fn read_from(reader: &mut ByteReader) -> Option<Self> {
         reader.read().map(Self::new)
+    }
+}
+
+impl<const N: usize, T> ReadFrom for [T; N]
+where
+    T: ReadFrom,
+{
+    fn read_from(reader: &mut ByteReader) -> Option<Self> {
+        let mut array: [MaybeUninit<T>; N] = [const { MaybeUninit::zeroed() }; N];
+        for x in array.iter_mut() {
+            let value = reader.read::<T>()?;
+            unsafe { copy_nonoverlapping(&value, x as *mut _ as *mut T, 1) };
+        }
+        let array = array.map(|x| unsafe { MaybeUninit::assume_init(x) });
+        Some(array)
     }
 }

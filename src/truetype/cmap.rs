@@ -130,12 +130,12 @@ impl CmapTable {
     pub(crate) fn load(reader: &mut ByteReader) -> Result<Self, TTFontLoadError> {
         let index = reader
             .read::<CmapIndex>()
-            .ok_or(TTFontLoadError::MalformedCmap)?;
+            .ok_or(TTFontLoadError::MalformedTable("cmap".into()))?;
         let subtable_headers: Vec<CmapSubtableHeader> = reader
             .read_multiple(index.number_subtables as usize)
             .collect::<Vec<CmapSubtableHeader>>();
         if subtable_headers.len() != index.number_subtables as usize {
-            return Err(TTFontLoadError::MalformedCmap);
+            return Err(TTFontLoadError::MalformedTable("cmap".into()));
         }
         let mut format0_tables = Vec::<CmapSubtableFormat0>::new();
         let mut format4_tables = Vec::<CmapSubtableFormat4>::new();
