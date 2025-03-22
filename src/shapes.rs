@@ -1,7 +1,8 @@
 use std::{borrow::Cow, mem};
 
 use cgmath::*;
-use glium::{Surface as _, index::PrimitiveType};
+use glium::{index::PrimitiveType, Texture2d};
+use image::{GrayImage, Luma};
 
 use crate::{
     bezier,
@@ -9,6 +10,10 @@ use crate::{
     context::Context,
     iterator, match_into_unchecked,
     mesh::{self, Mesh},
+    truetype::{
+        TrueTypeFont,
+        glyf::{Curve, SimpleGlyph},
+    },
 };
 
 fn point_is_nan(point: Point2<f32>) -> bool {
@@ -29,15 +34,140 @@ impl Vertex {
 
 glium::implement_vertex!(Vertex, position);
 
-#[derive(Debug)]
-pub(crate) struct SDFTest<'cx> {
-    pub(crate) mesh: Mesh<'cx, Vertex>,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct VertexWithUV {
+    pub(crate) position: [f32; 2],
+    pub(crate) uv: [f32; 2],
 }
 
-impl<'cx> SDFTest<'cx> {
-    pub(crate) fn new(context: &'cx Context) -> Self {
+impl VertexWithUV {
+    pub(crate) const fn new(position: [f32; 2], uv: [f32; 2]) -> Self {
+        Self { position, uv }
+    }
+}
+
+glium::implement_vertex!(VertexWithUV, position, uv);
+
+/// Vertex used for `Rect` and `Path`s.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct VertexWithColor {
+    pub(crate) position: [f32; 2],
+    pub(crate) color: [f32; 4],
+}
+
+impl VertexWithColor {
+    pub(crate) const fn new(position: [f32; 2], color: [f32; 4]) -> Self {
+        Self { position, color }
+    }
+}
+
+glium::implement_vertex!(VertexWithColor, position, color);
+
+/// Emulated fragment shader that outputs a monochrome color.
+fn frag_shader(_position: Vector2<f32>, uv: Vector2<f32>, points: &[Vec<Vector2<f32>>]) -> f32 {
+    #[allow(non_camel_case_types)]
+    type vec2 = Vector2<f32>;
+    #[allow(non_camel_case_types)]
+    type vec3 = Vector3<f32>;
+    #[allow(non_camel_case_types)]
+    type vec4 = Vector4<f32>;
+    #[allow(non_camel_case_types)]
+    type bvec2 = Vector2<bool>;
+    #[allow(non_camel_case_types)]
+    type bvec3 = Vector3<bool>;
+    #[allow(non_camel_case_types)]
+    type bvec4 = Vector4<bool>;
+
+    fn clamp(x: f32, min: f32, max: f32) -> f32 {
+        x.clamp(min, max)
+    }
+
+    fn length(v: vec2) -> f32 {
+        (v.x.powi(2) + v.y.powi(2)).sqrt()
+    }
+
+    fn dot(v0: vec2, v1: vec2) -> f32 {
+        v0.dot(v1)
+    }
+
+    fn min(f0: f32, f1: f32) -> f32 {
+        f0.min(f1)
+    }
+
+    fn max(f0: f32, f1: f32) -> f32 {
+        f0.max(f1)
+    }
+
+    fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+        let x = clamp((x - edge0) / (edge1 - edge0), 0., 1.);
+        x.powi(2) * (3. - 2. * x)
+    }
+
+    fn all3(bv: bvec3) -> bool {
+        bv.x && bv.y && bv.z
+    }
+
+    fn not3(bv: bvec3) -> bvec3 {
+        bv.map(|b| !b)
+    }
+
+    fn sd_polygon(v: &[vec2], p: vec2) -> f32 {
+        if v.is_empty() {
+            return 0.;
+        }
+        let mut d = dot(p - v[0], p - v[0]);
+        let mut s = 1.0;
+        for i in 0..v.len() {
+            let j = match i {
+                0 => v.len() - 1,
+                i => i - 1,
+            };
+            let e = v[j] - v[i];
+            let w = p - v[i];
+            let b = w - e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
+            d = min(d, dot(b, b));
+            let c = vec3(p.y >= v[i].y, p.y < v[j].y, e.x * w.y > e.y * w.x);
+            if all3(c) || all3(c.map(|b| !b)) {
+                s *= -1.0
+            }
+        }
+        s * d.sqrt()
+    }
+
+    let mut sd = 0.;
+    for points in points {
+        let sample = 1. - smoothstep(0.0, 0.0015, sd_polygon(points, uv));
+        if sd <= 0.5 {
+            sd += sample;
+        } else {
+            sd -= sample;
+        }
+    }
+    clamp(sd, 0., 1.)
+}
+
+#[derive(Debug)]
+pub(crate) struct TestRect<'cx> {
+    pub(crate) mesh: Mesh<'cx, VertexWithUV>,
+    pub(crate) image: GrayImage,
+    pub(crate) texture: Texture2d,
+    pub(crate) glyph: SimpleGlyph,
+    pub(crate) points: Vec<Vec<Point2<f32>>>,
+}
+
+impl<'cx> TestRect<'cx> {
+    pub(crate) fn new(
+        context: &'cx Context,
+        font: &TrueTypeFont,
+        scale_factor: f32,
+        char: char,
+    ) -> Self {
         let mut self_ = Self {
             mesh: Mesh::new(context),
+            image: GrayImage::new((100. * scale_factor) as u32, (100. * scale_factor) as u32),
+            texture: Texture2d::empty(&context.display, 1, 1).unwrap(),
+            glyph: font.get_glyph(char as u32).unwrap(),
+            points: Vec::new(),
         };
         self_.rebuild_mesh_data();
         self_
@@ -48,38 +178,112 @@ impl<'cx> SDFTest<'cx> {
     }
 
     pub(crate) fn rebuild_mesh_data(&mut self) {
+        let glyph_header = self.glyph.header;
+        let glyph_x_min = glyph_header.x_min.to_i16();
+        let glyph_y_min = glyph_header.y_min.to_i16();
+        let glyph_width = glyph_header.x_max.to_i16() - glyph_header.x_min.to_i16();
+        let glyph_height = glyph_header.y_max.to_i16() - glyph_header.y_min.to_i16();
+        let aspect_ratio = glyph_width as f32 / glyph_height as f32;
+
         let (vertices, indices) = self.mesh.vertices_indices_mut();
         vertices.clear();
         vertices.extend_from_slice(&[
-            Vertex::new([0., 1000.]),
-            Vertex::new([1000., 0.]),
-            Vertex::new([1000., 1000.]),
-            Vertex::new([0., 0.]),
+            VertexWithUV::new([0., 100.], [0., 1.]),
+            VertexWithUV::new([100. * aspect_ratio, 0.], [1., 0.]),
+            VertexWithUV::new([100. * aspect_ratio, 100.], [1., 1.]),
+            VertexWithUV::new([0., 0.], [0., 0.]),
         ]);
         indices.clear();
         indices.extend_from_slice(&[0, 1, 2, 1, 0, 3]);
+
+        let image_width = self.image.width();
+        let image_height = self.image.height();
+
+        let mut points = Vec::new();
+        let convert_point = move |point: Point2<i16>| -> Vector2<f32> {
+            vec2(
+                (point.x.saturating_sub(glyph_x_min)) as f32 / glyph_width as f32,
+                (point.y.saturating_sub(glyph_y_min)) as f32 / glyph_height as f32,
+            )
+        };
+        for contour in self.glyph.contours() {
+            let mut contour_points = Vec::new();
+            let mut previous_point = None;
+            for &curve in &contour.curves {
+                match curve {
+                    Curve::Linear(points) => {
+                        let [p0, p1] = points.map(convert_point);
+                        if previous_point != Some(p0) {
+                            contour_points.push(p0);
+                        }
+                        contour_points.push(p1);
+                        previous_point = Some(p1);
+                    }
+                    Curve::Quadratic(points) => {
+                        let [p0, p1, p2] = points.map(convert_point);
+                        if previous_point != Some(p0) {
+                            contour_points.push(p0);
+                        }
+                        contour_points.push(p1);
+                        for i in 1..=8 {
+                            let t = i as f32 / 8.;
+                            contour_points.push(
+                                bezier::bezier_quadratic(
+                                    [point2(p0.x, p0.y), point2(p1.x, p1.y), point2(p2.x, p2.y)],
+                                    t,
+                                )
+                                .to_vec(),
+                            );
+                        }
+                        contour_points.push(p2);
+                        previous_point = Some(p2);
+                    }
+                }
+            }
+            points.push(contour_points);
+        }
+
+        for i_x in 0..image_width {
+            for i_y in (0..image_height).rev() {
+                let position = vec2(i_x as f32, i_y as f32);
+                let uv = position.div_element_wise(vec2(image_width as f32, image_height as f32));
+                let fragment = frag_shader(position, uv, &points);
+                let pixel = self.image.get_pixel_mut(i_x, image_height - i_y - 1);
+                *pixel = Luma([(fragment.clamp(0., 1.) * 255.0) as u8]);
+            }
+        }
+
+        let image = glium::texture::RawImage2d {
+            data: Cow::Borrowed(self.image.as_ref()),
+            width: image_width,
+            height: image_height,
+            format: glium::texture::ClientFormat::U8,
+        };
+        self.texture = Texture2d::with_format(
+            &self.context().display,
+            image,
+            glium::texture::UncompressedFloatFormat::U8,
+            glium::texture::MipmapsOption::NoMipmap,
+        )
+        .unwrap();
     }
 
     pub(crate) fn draw(&mut self, frame: &mut glium::Frame, model: Matrix4<f32>) {
         self.mesh.update_if_needed();
-        let (frame_width, frame_height) = frame.get_dimensions();
-        let (frame_width, frame_height) = (frame_width as f32, frame_height as f32);
         let model_view = model;
-        let projection = cgmath::ortho(
-            -frame_width / 2.,
-            frame_width / 2.,
-            frame_height / 2.,
-            -frame_height / 2.,
-            -1.,
-            1.,
-        );
+        let projection = self.context().projection_matrix();
         self.mesh.draw(
             frame,
             glium::uniform! {
-                model_view: mesh::matrix4_to_array(model_view),
-                projection: mesh::matrix4_to_array(projection),
+            model_view: mesh::matrix4_to_array(model_view),
+            projection: mesh::matrix4_to_array(projection),
+            tex: self.texture
+                    .sampled()
+                    .magnify_filter(glium::uniforms::MagnifySamplerFilter::Nearest)
+                    .minify_filter(glium::uniforms::MinifySamplerFilter::Nearest)
+                    .wrap_function(glium::uniforms::SamplerWrapFunction::Repeat),
             },
-            &self.context().shader_sdf_rect,
+            &self.context().shader_test_rect,
             &mesh::default_2d_draw_parameters(),
         );
     }
@@ -90,15 +294,6 @@ pub enum PathDrawingMode {
     Line,
     Fill,
 }
-
-/// Vertex used for `Rect` and `Path`s.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct ColoredVertex {
-    pub(crate) position: [f32; 2],
-    pub(crate) color: [f32; 4],
-}
-
-glium::implement_vertex!(ColoredVertex, position, color);
 
 /// A spline made from cubic beziers.
 #[derive(Debug)]
@@ -371,7 +566,7 @@ impl<'a, 'cx> BezierPath<'a, 'cx> {
 
 #[derive(Debug)]
 pub struct Path<'cx> {
-    mesh: Mesh<'cx, ColoredVertex>,
+    mesh: Mesh<'cx, VertexWithColor>,
     draw_mode: PathDrawingMode,
 }
 
@@ -412,7 +607,7 @@ impl<'cx> Path<'cx> {
     pub fn push_point(&mut self, position: Point2<f32>, color: Color) {
         let (vertices, indices) = self.mesh.vertices_indices_mut();
         let index = vertices.len() as u32;
-        vertices.push(ColoredVertex {
+        vertices.push(VertexWithColor {
             position: position.into(),
             color: color.into(),
         });
@@ -430,16 +625,7 @@ impl<'cx> Path<'cx> {
             PathDrawingMode::Line => (glium::PolygonMode::Line, Some(1.0f32)),
             PathDrawingMode::Fill => (glium::PolygonMode::Fill, None),
         };
-        let (frame_width, frame_height) = frame.get_dimensions();
-        let (frame_width, frame_height) = (frame_width as f32, frame_height as f32);
-        let projection = cgmath::ortho(
-            -frame_width / 2.,
-            frame_width / 2.,
-            frame_height / 2.,
-            -frame_height / 2.,
-            -1.,
-            1.,
-        );
+        let projection = self.context().projection_matrix();
         let model_view = model;
         self.mesh.draw(
             frame,
@@ -458,17 +644,9 @@ impl<'cx> Path<'cx> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct CircleVertex {
-    pub position: [f32; 2],
-    pub normalized: [f32; 2],
-}
-
-glium::implement_vertex!(CircleVertex, position, normalized);
-
 #[derive(Debug)]
 pub struct Circle<'cx> {
-    mesh: Mesh<'cx, CircleVertex>,
+    mesh: Mesh<'cx, VertexWithUV>,
     fill_color: Color,
     inner_radius: f32,
     outer_radius: f32,
@@ -512,22 +690,10 @@ impl<'cx> Circle<'cx> {
     pub(crate) fn rebuild_mesh_data(&mut self) {
         let rect_size = self.outer_radius * 2.;
         let vertices_data = [
-            CircleVertex {
-                position: [0., rect_size],
-                normalized: [-1., 1.],
-            },
-            CircleVertex {
-                position: [rect_size, 0.],
-                normalized: [1., -1.],
-            },
-            CircleVertex {
-                position: [rect_size, rect_size],
-                normalized: [1., 1.],
-            },
-            CircleVertex {
-                position: [0., 0.],
-                normalized: [-1., -1.],
-            },
+            VertexWithUV::new([0., rect_size], [-1., 1.]),
+            VertexWithUV::new([rect_size, 0.], [1., -1.]),
+            VertexWithUV::new([rect_size, rect_size], [1., 1.]),
+            VertexWithUV::new([0., 0.], [-1., -1.]),
         ];
         #[rustfmt::skip]
         let indices_data = [
@@ -547,16 +713,7 @@ impl<'cx> Circle<'cx> {
         }
         self.mesh.update_if_needed();
         let model_view = model;
-        let (frame_width, frame_height) = frame.get_dimensions();
-        let (frame_width, frame_height) = (frame_width as f32, frame_height as f32);
-        let projection = cgmath::ortho(
-            -frame_width / 2.,
-            frame_width / 2.,
-            frame_height / 2.,
-            -frame_height / 2.,
-            -1.,
-            1.,
-        );
+        let projection = self.context().projection_matrix();
         self.mesh.draw(
             frame,
             glium::uniform! {
@@ -593,7 +750,7 @@ impl Default for RectFillColor {
 
 #[derive(Debug)]
 pub struct Rect<'cx> {
-    mesh: Mesh<'cx, ColoredVertex>,
+    mesh: Mesh<'cx, VertexWithColor>,
     fill_color: RectFillColor,
     size: Vector2<f32>,
 }
@@ -643,17 +800,8 @@ impl<'cx> Rect<'cx> {
             _ => (),
         }
         self.mesh.update_if_needed();
-        let (frame_width, frame_height) = frame.get_dimensions();
-        let (frame_width, frame_height) = (frame_width as f32, frame_height as f32);
         let model_view = model;
-        let projection = cgmath::ortho(
-            -frame_width / 2.,
-            frame_width / 2.,
-            frame_height / 2.,
-            -frame_height / 2.,
-            -1.,
-            1.,
-        );
+        let projection = self.context().projection_matrix();
         self.mesh.draw(
             frame,
             glium::uniform! {
@@ -674,22 +822,10 @@ impl<'cx> Rect<'cx> {
             RectFillColor::GradientVertical(color0, color1) => (color0, color0, color1, color1),
         };
         let vertices_data = [
-            ColoredVertex {
-                position: [0., self.size.y],
-                color: color_bottom_left.into_array(),
-            },
-            ColoredVertex {
-                position: [self.size.x, 0.],
-                color: color_top_right.into_array(),
-            },
-            ColoredVertex {
-                position: [self.size.x, self.size.y],
-                color: color_bottom_right.into_array(),
-            },
-            ColoredVertex {
-                position: [0., 0.],
-                color: color_top_left.into_array(),
-            },
+            VertexWithColor::new([0., self.size.y], color_bottom_left.into_array()),
+            VertexWithColor::new([self.size.x, 0.], color_top_right.into_array()),
+            VertexWithColor::new([self.size.x, self.size.y], color_bottom_right.into_array()),
+            VertexWithColor::new([0., 0.], color_top_left.into_array()),
         ];
         #[rustfmt::skip]
         let indices_data = [

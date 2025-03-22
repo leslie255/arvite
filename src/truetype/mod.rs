@@ -165,8 +165,6 @@ impl TrueTypeFont {
         font.load_cmap()?;
         font.load_loca()?;
         font.load_hhea()?;
-        dbg!(font.head_table());
-        dbg!(font.hhea_table());
         Ok(font)
     }
 

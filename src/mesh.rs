@@ -27,6 +27,14 @@ pub fn texture_sampler(texture: &glium::Texture2d) -> glium::uniforms::Sampler<g
         .wrap_function(glium::uniforms::SamplerWrapFunction::Repeat)
 }
 
+pub fn texture_sampler_linear(texture: &glium::Texture2d) -> glium::uniforms::Sampler<glium::Texture2d> {
+    texture
+        .sampled()
+        .magnify_filter(glium::uniforms::MagnifySamplerFilter::Linear)
+        .minify_filter(glium::uniforms::MinifySamplerFilter::Linear)
+        .wrap_function(glium::uniforms::SamplerWrapFunction::Repeat)
+}
+
 pub fn default_3d_draw_parameters() -> glium::DrawParameters<'static> {
     glium::DrawParameters {
         depth: glium::Depth {

@@ -9,7 +9,7 @@ pub struct Context {
     pub(crate) loader: ResourceLoader,
     pub(crate) shader_text: glium::Program,
     pub(crate) shader_rect: glium::Program,
-    pub(crate) shader_sdf_rect: glium::Program,
+    pub(crate) shader_test_rect: glium::Program,
     pub(crate) shader_circle: glium::Program,
     pub(crate) font: AtlasFont,
     pub(crate) ttf_font_file: File,
@@ -22,7 +22,7 @@ impl Context {
         Self {
             shader_text: Self::load_shader(&display, &loader, "shader/text"),
             shader_rect: Self::load_shader(&display, &loader, "shader/rect"),
-            shader_sdf_rect: Self::load_shader(&display, &loader, "shader/sdf_rect"),
+            shader_test_rect: Self::load_shader(&display, &loader, "shader/test_rect"),
             shader_circle: Self::load_shader(&display, &loader, "shader/circle"),
             font: Self::load_font(&display, &loader, "font/big_blue_terminal.json"),
             ttf_font_file: loader.open_file("font/cmunbi.ttf"),
@@ -77,6 +77,16 @@ impl Context {
     pub fn display_size(&self) -> Vector2<f32> {
         Vector2::from(self.display.get_framebuffer_dimensions()).map(|x| x as f32)
     }
+
+    pub(crate) fn projection_matrix(&self) -> Matrix4<f32> {
+        let display_size = self.display_size();
+        cgmath::ortho(
+            -display_size.x / 2.,
+            display_size.x / 2.,
+            display_size.y / 2.,
+            -display_size.y / 2.,
+            -1.,
+            1.,
+        )
+    }
 }
-
-

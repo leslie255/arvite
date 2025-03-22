@@ -5,7 +5,6 @@ use std::path::Path;
 
 use std::ops::Range;
 
-use glium::Surface as _;
 use image::DynamicImage;
 use serde::{Deserialize, Serialize};
 
@@ -266,16 +265,7 @@ impl<'a, 'cx> Line<'a, 'cx> {
     pub fn draw(&mut self, frame: &mut glium::Frame, model: Matrix4<f32>) {
         self.mesh.update_if_needed();
         let model = model * Matrix4::from_nonuniform_scale(self.font_size, self.font_size, 1.);
-        let (frame_width, frame_height) = frame.get_dimensions();
-        let (frame_width, frame_height) = (frame_width as f32, frame_height as f32);
-        let projection = cgmath::ortho(
-            -frame_width / 2.,
-            frame_width / 2.,
-            frame_height / 2.,
-            -frame_height / 2.,
-            -1.,
-            1.,
-        );
+        let projection = self.context().projection_matrix();
         if self.shadow {
             let model =
                 Matrix4::from_translation(vec3(self.font_size * 0.1, self.font_size * 0.1, 0.))

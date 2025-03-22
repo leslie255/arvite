@@ -22,10 +22,10 @@ use crate::{
     color::Color,
     context::Context,
     input::InputHelper,
-    shapes::{BezierSplinePath, Path, PathDrawingMode, SDFTest},
+    shapes::{BezierSplinePath, Path, PathDrawingMode, TestRect},
     svg::SvgPathBuilder,
     text::Line,
-    truetype::{glyf::Curve, TrueTypeFont},
+    truetype::{TrueTypeFont, glyf::Curve},
     utils::BoolToggle,
 };
 
@@ -154,7 +154,7 @@ impl<'cx> CoordinateMarker<'cx> {
                 cross
             },
             text: {
-                let string = format!("({:.2}, {:.2})", position.x, position.y);
+                let string = format!("({:}, {:})", position.x, position.y);
                 let mut line = Line::new_with_string(context, string.into());
                 line.set_fg_color(Color::new(1., 1., 1., 0.7));
                 line.set_bg_color(Color::new(0., 0., 0., 0.));
@@ -197,14 +197,18 @@ pub struct Application<'cx> {
     current_char: char,
     font: TrueTypeFont,
     fps_text: Line<'static, 'cx>,
-    position_text: Line<'static, 'cx>,
     spline: BezierSplinePath<'static, 'cx>,
+    test_rect: Option<TestRect<'cx>>,
     coordinate_markers: Vec<CoordinateMarker<'cx>>,
 }
 
 impl<'cx> Application<'cx> {
     pub fn new(context: &'cx Context, window: winit::window::Window) -> Self {
         let scale_factor = window.scale_factor() as f32;
+        let font = {
+            let file = context.ttf_font_file.try_clone().unwrap();
+            TrueTypeFont::load_from_file(file).unwrap()
+        };
         let mut self_ = Self {
             window,
             clipboard_context: match ClipboardProvider::new() {
@@ -222,23 +226,12 @@ impl<'cx> Application<'cx> {
             canvas: Canvas::new(scale_factor),
             epoch: Instant::now(),
             current_char: 'A',
-            font: {
-                let file = context.ttf_font_file.try_clone().unwrap();
-                TrueTypeFont::load_from_file(file).unwrap()
-            },
             fps_text: {
                 let mut line = Line::new(context);
                 line.set_string("FPS : ---.---".into());
                 line.set_fg_color(Color::new(1., 1., 1., 0.7));
                 line.set_bg_color(Color::new(0.5, 0.5, 0.5, 0.5));
                 line.set_font_size(16. * scale_factor);
-                line
-            },
-            position_text: {
-                let mut line = Line::new(context);
-                line.set_fg_color(Color::new(1., 1., 1., 0.7));
-                line.set_bg_color(Color::new(0.5, 0.5, 0.5, 0.5));
-                line.set_font_size(12. * scale_factor);
                 line
             },
             spline: {
@@ -249,12 +242,12 @@ impl<'cx> Application<'cx> {
                 spline.set_color(Color::new(1., 1., 1., 1.));
                 spline
             },
-            coordinate_markers: vec![
-                CoordinateMarker::new(context, point2(0., 0.)),
-                CoordinateMarker::new(context, point2(200., 200.)),
-            ],
+            test_rect: None,
+            font,
+            coordinate_markers: Vec::new(),
             context,
         };
+        self_.reset_coordinate_markers();
         self_.set_character('A');
         self_
     }
@@ -264,7 +257,7 @@ impl<'cx> Application<'cx> {
     }
 
     fn convert_y(&self, y: i16) -> f32 {
-        -y as f32
+        y.saturating_neg() as f32
     }
 
     fn convert_point(&self, point: Point2<i16>) -> Point2<f32> {
@@ -272,10 +265,9 @@ impl<'cx> Application<'cx> {
     }
 
     fn set_character(&mut self, char: char) {
-        let advance_width_max =
-            self.convert_x(self.font.hhea_table().advance_width_max.to_u16() as i16);
-        self.coordinate_markers[1] =
-            CoordinateMarker::new(self.context, point2(advance_width_max, 0.));
+        let scale_factor = self.window.scale_factor() as f32;
+        self.test_rect = Some(TestRect::new(self.context, &self.font, scale_factor, char));
+
         self.current_char = char;
         self.spline.segments_mut().clear();
         self.selected_point = None;
@@ -319,19 +311,8 @@ impl<'cx> Application<'cx> {
             marker.draw(&mut frame, &self.canvas);
         }
 
-        self.spline
-            .draw(&mut frame, self.canvas.model(point2(0., 0.)));
-
-        // Position label.
-        if let Some(selected_point) = self
-            .selected_point
-            .and_then(|i| self.spline.segments().get(i.0).map(|segment| segment[i.1]))
-        {
-            self.position_text
-                .set_string(format!("{:.3} {:.3}", selected_point.x, selected_point.y).into());
-            self.position_text
-                .draw(&mut frame, self.canvas.model(selected_point + vec2(8., 8.)));
-        }
+        // self.spline
+        //     .draw(&mut frame, self.canvas.model(point2(0., 0.)));
 
         if self.show_fps {
             let (frame_width, frame_height) = frame.get_dimensions();
@@ -345,8 +326,9 @@ impl<'cx> Application<'cx> {
             );
         }
 
-        let mut sdf_test = SDFTest::new(self.context);
-        sdf_test.draw(&mut frame, self.canvas.model(point2(0., 0.)));
+        if let Some(test_rect) = self.test_rect.as_mut() {
+            test_rect.draw(&mut frame, self.canvas.model(point2(0., -100.)));
+        }
 
         frame.finish().unwrap();
         if let Some(fps) = self.fps_counter.frame() {
@@ -357,6 +339,13 @@ impl<'cx> Application<'cx> {
     fn clear_frame(&mut self, frame: &mut glium::Frame) {
         let clear_color = (0.1, 0.1, 0.1, 1.);
         frame.clear_color_and_depth(clear_color, 1.);
+    }
+
+    fn reset_coordinate_markers(&mut self) {
+        self.coordinate_markers = vec![
+            CoordinateMarker::new(self.context, point2(0., 0.)),
+            CoordinateMarker::new(self.context, point2(100., 0.)),
+        ];
     }
 
     fn scale_factor_changed(&mut self, scale_factor: f32) {
@@ -406,12 +395,7 @@ impl<'cx> Application<'cx> {
             }
             KeyCode::Backspace if !is_repeat && self.input_helper.control_is_down() => {
                 println!("Reset coordinate markers");
-                let advance_width_max =
-                    self.convert_x(self.font.hhea_table().advance_width_max.to_u16() as i16);
-                self.coordinate_markers = vec![
-                    CoordinateMarker::new(self.context, point2(0., 0.)),
-                    CoordinateMarker::new(self.context, point2(advance_width_max, 0.)),
-                ];
+                self.reset_coordinate_markers();
             }
             KeyCode::KeyF if !is_repeat && self.input_helper.control_is_down() => {
                 println!("Toggled showing FPS");
@@ -421,6 +405,16 @@ impl<'cx> Application<'cx> {
                 if self.input_helper.control_is_down() | self.input_helper.super_is_down() =>
             {
                 self.canvas.scale(0.1);
+            }
+            KeyCode::Minus | KeyCode::Minus
+                if self.input_helper.control_is_down() | self.input_helper.super_is_down() =>
+            {
+                self.canvas.scale(-0.1);
+            }
+            KeyCode::Digit0 | KeyCode::Numpad0
+                if self.input_helper.control_is_down() | self.input_helper.super_is_down() =>
+            {
+                self.canvas.scale = 1.;
             }
             KeyCode::Minus | KeyCode::Minus
                 if self.input_helper.control_is_down() | self.input_helper.super_is_down() =>
