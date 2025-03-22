@@ -22,7 +22,7 @@ use crate::{
     color::Color,
     context::Context,
     input::InputHelper,
-    shapes::{BezierSplinePath, Path, PathDrawingMode, TestRect},
+    shapes::{BezierSplinePath, Path, PathDrawingMode, TrueTypeChar},
     svg::SvgPathBuilder,
     text::Line,
     truetype::{TrueTypeFont, glyf::Curve},
@@ -198,7 +198,7 @@ pub struct Application<'cx> {
     font: TrueTypeFont,
     fps_text: Line<'static, 'cx>,
     spline: BezierSplinePath<'static, 'cx>,
-    test_rect: Option<TestRect<'cx>>,
+    test_rect: Option<TrueTypeChar<'cx>>,
     coordinate_markers: Vec<CoordinateMarker<'cx>>,
 }
 
@@ -266,7 +266,7 @@ impl<'cx> Application<'cx> {
 
     fn set_character(&mut self, char: char) {
         let scale_factor = self.window.scale_factor() as f32;
-        self.test_rect = Some(TestRect::new(self.context, &self.font, scale_factor, char));
+        self.test_rect = Some(TrueTypeChar::new(self.context, &self.font, scale_factor, char));
 
         self.current_char = char;
         self.spline.segments_mut().clear();

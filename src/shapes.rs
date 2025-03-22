@@ -1,8 +1,8 @@
 use std::{borrow::Cow, mem};
 
 use cgmath::*;
-use glium::{index::PrimitiveType, Texture2d};
-use image::{GrayImage, Luma};
+use glium::{Texture2d, index::PrimitiveType};
+use image::GrayImage;
 
 use crate::{
     bezier,
@@ -136,40 +136,41 @@ fn frag_shader(_position: Vector2<f32>, uv: Vector2<f32>, points: &[Vec<Vector2<
 
     let mut sd = 0.;
     for points in points {
-        let sample = 1. - smoothstep(0.0, 0.0015, sd_polygon(points, uv));
-        if sd <= 0.5 {
-            sd += sample;
-        } else {
-            sd -= sample;
-        }
+        let sample = 1. - smoothstep(0.0, 0.01, sd_polygon(points, uv));
+        sd -= sample;
+        sd = sd.abs();
+        sd = clamp(sd, 0.0, 1.0);
     }
     clamp(sd, 0., 1.)
 }
 
 #[derive(Debug)]
-pub(crate) struct TestRect<'cx> {
+pub(crate) struct TrueTypeChar<'cx> {
     pub(crate) mesh: Mesh<'cx, VertexWithUV>,
     pub(crate) image: GrayImage,
     pub(crate) texture: Texture2d,
-    pub(crate) glyph: SimpleGlyph,
-    pub(crate) points: Vec<Vec<Point2<f32>>>,
+    pub(crate) glyph: Option<SimpleGlyph>,
+    pub(crate) points: Vec<Vec<Vector2<f32>>>,
 }
 
-impl<'cx> TestRect<'cx> {
+impl<'cx> TrueTypeChar<'cx> {
     pub(crate) fn new(
         context: &'cx Context,
         font: &TrueTypeFont,
         scale_factor: f32,
         char: char,
     ) -> Self {
+        let width = (100. * scale_factor) as u32;
+        let height = (100. * scale_factor) as u32;
         let mut self_ = Self {
             mesh: Mesh::new(context),
-            image: GrayImage::new((100. * scale_factor) as u32, (100. * scale_factor) as u32),
+            image: GrayImage::new(width, height),
             texture: Texture2d::empty(&context.display, 1, 1).unwrap(),
-            glyph: font.get_glyph(char as u32).unwrap(),
+            glyph: font.get_glyph(char as u32),
             points: Vec::new(),
         };
         self_.rebuild_mesh_data();
+        self_.resample(width, height);
         self_
     }
 
@@ -178,7 +179,10 @@ impl<'cx> TestRect<'cx> {
     }
 
     pub(crate) fn rebuild_mesh_data(&mut self) {
-        let glyph_header = self.glyph.header;
+        let Some(ref glyph) = self.glyph else {
+            return;
+        };
+        let glyph_header = glyph.header;
         let glyph_x_min = glyph_header.x_min.to_i16();
         let glyph_y_min = glyph_header.y_min.to_i16();
         let glyph_width = glyph_header.x_max.to_i16() - glyph_header.x_min.to_i16();
@@ -196,9 +200,6 @@ impl<'cx> TestRect<'cx> {
         indices.clear();
         indices.extend_from_slice(&[0, 1, 2, 1, 0, 3]);
 
-        let image_width = self.image.width();
-        let image_height = self.image.height();
-
         let mut points = Vec::new();
         let convert_point = move |point: Point2<i16>| -> Vector2<f32> {
             vec2(
@@ -206,7 +207,7 @@ impl<'cx> TestRect<'cx> {
                 (point.y.saturating_sub(glyph_y_min)) as f32 / glyph_height as f32,
             )
         };
-        for contour in self.glyph.contours() {
+        for contour in glyph.contours() {
             let mut contour_points = Vec::new();
             let mut previous_point = None;
             for &curve in &contour.curves {
@@ -224,7 +225,6 @@ impl<'cx> TestRect<'cx> {
                         if previous_point != Some(p0) {
                             contour_points.push(p0);
                         }
-                        contour_points.push(p1);
                         for i in 1..=8 {
                             let t = i as f32 / 8.;
                             contour_points.push(
@@ -243,20 +243,26 @@ impl<'cx> TestRect<'cx> {
             points.push(contour_points);
         }
 
-        for i_x in 0..image_width {
-            for i_y in (0..image_height).rev() {
+        self.points = points;
+    }
+
+    pub(crate) fn resample(&mut self, width: u32, height: u32) {
+        self.image = GrayImage::new(width, height);
+
+        for i_x in 0..width {
+            for i_y in (0..height).rev() {
                 let position = vec2(i_x as f32, i_y as f32);
-                let uv = position.div_element_wise(vec2(image_width as f32, image_height as f32));
-                let fragment = frag_shader(position, uv, &points);
-                let pixel = self.image.get_pixel_mut(i_x, image_height - i_y - 1);
-                *pixel = Luma([(fragment.clamp(0., 1.) * 255.0) as u8]);
+                let uv = position.div_element_wise(vec2(width as f32, height as f32));
+                let fragment = frag_shader(position, uv, &self.points[..]);
+                let pixel = self.image.get_pixel_mut(i_x, height - i_y - 1);
+                *pixel = [(fragment.clamp(0., 1.) * 255.0) as u8].into();
             }
         }
 
         let image = glium::texture::RawImage2d {
             data: Cow::Borrowed(self.image.as_ref()),
-            width: image_width,
-            height: image_height,
+            width,
+            height,
             format: glium::texture::ClientFormat::U8,
         };
         self.texture = Texture2d::with_format(
