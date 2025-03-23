@@ -229,7 +229,7 @@ impl<'cx> Application<'cx> {
             fps_text: {
                 let mut line = Line::new(context);
                 line.set_string("FPS : ---.---".into());
-                line.set_fg_color(Color::new(1., 1., 1., 0.7));
+                line.set_fg_color(Color::new(1., 1., 1., 1.));
                 line.set_bg_color(Color::new(0.5, 0.5, 0.5, 0.5));
                 line.set_font_size(16. * scale_factor);
                 line
@@ -265,8 +265,7 @@ impl<'cx> Application<'cx> {
     }
 
     fn set_character(&mut self, char: char) {
-        let scale_factor = self.window.scale_factor() as f32;
-        self.test_rect = Some(TrueTypeChar::new(self.context, &self.font, scale_factor, char));
+        self.test_rect = Some(TrueTypeChar::new(self.context, &self.font, char));
 
         self.current_char = char;
         self.spline.segments_mut().clear();
@@ -517,7 +516,20 @@ impl<'cx> Application<'cx> {
 
     fn scrolled(&mut self, delta_physical: Vector2<f32>) {
         if self.input_helper.alt_is_down() {
-            self.canvas.scale(delta_physical.y / 120.);
+            let position = self
+                .input_helper
+                .cursor_position_physical()
+                .unwrap_or(point2(0., 0.));
+            let position_centered = position - self.frame_size() / 2.;
+            if delta_physical.y.is_sign_positive() {
+                self.canvas
+                    .move_(-position_centered.to_vec() * delta_physical.y / 240.);
+            }
+            self.canvas.scale(delta_physical.y / 240.);
+            if delta_physical.y.is_sign_negative() {
+                self.canvas
+                    .move_(-position_centered.to_vec() * delta_physical.y / 240.);
+            }
         } else {
             self.canvas.move_(delta_physical);
         }
@@ -590,7 +602,14 @@ impl winit::application::ApplicationHandler for Application<'_> {
                 delta,
                 phase: _,
             } => {
+                let position = self
+                    .input_helper
+                    .cursor_position_physical()
+                    .unwrap_or(point2(0., 0.));
+                let position_centered = position - self.frame_size() / 2.;
                 self.canvas.scale(delta as f32);
+                self.canvas
+                    .move_(-position_centered.to_vec() * delta as f32);
             }
             winit::event::WindowEvent::CursorLeft { device_id: _ } => {
                 self.input_helper.notify_cursor_left();

@@ -1,8 +1,11 @@
-use std::{borrow::Cow, mem};
+use std::{
+    borrow::Cow,
+    mem::{self},
+    time::Instant,
+};
 
 use cgmath::*;
 use glium::{Texture2d, index::PrimitiveType};
-use image::GrayImage;
 
 use crate::{
     bezier,
@@ -64,7 +67,7 @@ impl VertexWithColor {
 glium::implement_vertex!(VertexWithColor, position, color);
 
 /// Emulated fragment shader that outputs a monochrome color.
-fn frag_shader(_position: Vector2<f32>, uv: Vector2<f32>, points: &[Vec<Vector2<f32>>]) -> f32 {
+fn sd_contours(_position: Vector2<f32>, uv: Vector2<f32>, contours: &[Vec<Vector2<f32>>]) -> f32 {
     #[allow(non_camel_case_types)]
     type vec2 = Vector2<f32>;
     #[allow(non_camel_case_types)]
@@ -78,43 +81,54 @@ fn frag_shader(_position: Vector2<f32>, uv: Vector2<f32>, points: &[Vec<Vector2<
     #[allow(non_camel_case_types)]
     type bvec4 = Vector4<bool>;
 
+    #[inline(always)]
     fn clamp(x: f32, min: f32, max: f32) -> f32 {
         x.clamp(min, max)
     }
 
+    #[inline(always)]
     fn length(v: vec2) -> f32 {
         (v.x.powi(2) + v.y.powi(2)).sqrt()
     }
 
+    #[inline(always)]
     fn dot(v0: vec2, v1: vec2) -> f32 {
         v0.dot(v1)
     }
 
+    #[inline(always)]
     fn min(f0: f32, f1: f32) -> f32 {
         f0.min(f1)
     }
 
+    #[inline(always)]
     fn max(f0: f32, f1: f32) -> f32 {
         f0.max(f1)
     }
 
+    #[inline(always)]
     fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
         let x = clamp((x - edge0) / (edge1 - edge0), 0., 1.);
         x.powi(2) * (3. - 2. * x)
     }
 
+    #[inline(always)]
     fn all3(bv: bvec3) -> bool {
         bv.x && bv.y && bv.z
     }
 
+    #[inline(always)]
     fn not3(bv: bvec3) -> bvec3 {
-        bv.map(|b| !b)
+        vec3(!bv.x, !bv.y, !bv.z)
     }
 
-    fn sd_polygon(v: &[vec2], p: vec2) -> f32 {
+    /// Also returns a flag that's true if it's clockwise.
+    fn sd_polygon(v: &[vec2], p: vec2) -> (bool, f32) {
         if v.is_empty() {
-            return 0.;
+            return (false, 0.);
         }
+        // The determinant for whether it's clockwise or counter-clockwise.
+        let mut dir_det = 0.0;
         let mut d = dot(p - v[0], p - v[0]);
         let mut s = 1.0;
         for i in 0..v.len() {
@@ -122,55 +136,55 @@ fn frag_shader(_position: Vector2<f32>, uv: Vector2<f32>, points: &[Vec<Vector2<
                 0 => v.len() - 1,
                 i => i - 1,
             };
-            let e = v[j] - v[i];
-            let w = p - v[i];
+            let v_i = unsafe { *v.get_unchecked(i) };
+            let v_j = unsafe { *v.get_unchecked(j) };
+            dir_det += (v_j.x - v_i.x) * (v_j.y + v_i.y);
+            let e = v_j - v_i;
+            let w = p - v_i;
             let b = w - e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
             d = min(d, dot(b, b));
-            let c = vec3(p.y >= v[i].y, p.y < v[j].y, e.x * w.y > e.y * w.x);
-            if all3(c) || all3(c.map(|b| !b)) {
+            let c = vec3(p.y >= v_i.y, p.y < v_j.y, e.x * w.y > e.y * w.x);
+            if all3(c) || all3(not3(c)) {
                 s *= -1.0
             }
         }
-        s * d.sqrt()
+        (dir_det.is_sign_positive(), s * d.sqrt())
     }
 
-    let mut sd = 0.;
-    for points in points {
-        let sample = 1. - smoothstep(0.0, 0.01, sd_polygon(points, uv));
-        sd -= sample;
-        sd = sd.abs();
-        sd = clamp(sd, 0.0, 1.0);
+    let mut sd = 1.0;
+    for polygon in contours {
+        let (closewise, d) = sd_polygon(polygon, uv);
+        if !closewise {
+            sd = min(sd, d);
+        } else {
+            sd = max(sd, -max(sd, d));
+        }
     }
-    clamp(sd, 0., 1.)
+    sd
 }
 
 #[derive(Debug)]
 pub(crate) struct TrueTypeChar<'cx> {
     pub(crate) mesh: Mesh<'cx, VertexWithUV>,
-    pub(crate) image: GrayImage,
+    pub(crate) image: Vec<f32>,
+    pub(crate) image_size: Vector2<u32>,
     pub(crate) texture: Texture2d,
     pub(crate) glyph: Option<SimpleGlyph>,
     pub(crate) points: Vec<Vec<Vector2<f32>>>,
 }
 
 impl<'cx> TrueTypeChar<'cx> {
-    pub(crate) fn new(
-        context: &'cx Context,
-        font: &TrueTypeFont,
-        scale_factor: f32,
-        char: char,
-    ) -> Self {
-        let width = (100. * scale_factor) as u32;
-        let height = (100. * scale_factor) as u32;
+    pub(crate) fn new(context: &'cx Context, font: &TrueTypeFont, char: char) -> Self {
         let mut self_ = Self {
             mesh: Mesh::new(context),
-            image: GrayImage::new(width, height),
+            image: Vec::new(),
+            image_size: vec2(0, 0),
             texture: Texture2d::empty(&context.display, 1, 1).unwrap(),
             glyph: font.get_glyph(char as u32),
             points: Vec::new(),
         };
         self_.rebuild_mesh_data();
-        self_.resample(width, height);
+        self_.resample(128, 128);
         self_
     }
 
@@ -185,8 +199,14 @@ impl<'cx> TrueTypeChar<'cx> {
         let glyph_header = glyph.header;
         let glyph_x_min = glyph_header.x_min.to_i16();
         let glyph_y_min = glyph_header.y_min.to_i16();
-        let glyph_width = glyph_header.x_max.to_i16() - glyph_header.x_min.to_i16();
-        let glyph_height = glyph_header.y_max.to_i16() - glyph_header.y_min.to_i16();
+        let glyph_width = glyph_header
+            .x_max
+            .to_i16()
+            .saturating_sub(glyph_header.x_min.to_i16());
+        let glyph_height = glyph_header
+            .y_max
+            .to_i16()
+            .saturating_sub(glyph_header.y_min.to_i16());
         let aspect_ratio = glyph_width as f32 / glyph_height as f32;
 
         let (vertices, indices) = self.mesh.vertices_indices_mut();
@@ -200,11 +220,16 @@ impl<'cx> TrueTypeChar<'cx> {
         indices.clear();
         indices.extend_from_slice(&[0, 1, 2, 1, 0, 3]);
 
+        let margin = 0.05f32;
         let mut points = Vec::new();
         let convert_point = move |point: Point2<i16>| -> Vector2<f32> {
             vec2(
-                (point.x.saturating_sub(glyph_x_min)) as f32 / glyph_width as f32,
-                (point.y.saturating_sub(glyph_y_min)) as f32 / glyph_height as f32,
+                (point.x.saturating_sub(glyph_x_min)) as f32 / glyph_width as f32
+                    * (1. - 2. * margin)
+                    + margin,
+                (point.y.saturating_sub(glyph_y_min)) as f32 / glyph_height as f32
+                    * (1. - 2. * margin)
+                    + margin,
             )
         };
         for contour in glyph.contours() {
@@ -225,8 +250,9 @@ impl<'cx> TrueTypeChar<'cx> {
                         if previous_point != Some(p0) {
                             contour_points.push(p0);
                         }
-                        for i in 1..=8 {
-                            let t = i as f32 / 8.;
+                        let resolution = 8;
+                        for i in 1..=resolution {
+                            let t = i as f32 / resolution as f32;
                             contour_points.push(
                                 bezier::bezier_quadratic(
                                     [point2(p0.x, p0.y), point2(p1.x, p1.y), point2(p2.x, p2.y)],
@@ -247,15 +273,23 @@ impl<'cx> TrueTypeChar<'cx> {
     }
 
     pub(crate) fn resample(&mut self, width: u32, height: u32) {
-        self.image = GrayImage::new(width, height);
+        if self.image_size == vec2(width, height) {
+            return;
+        }
+
+        let before = Instant::now();
+
+        self.image = vec![0.0f32; (width as usize) * (height as usize)];
+        self.image_size = vec2(width, height);
 
         for i_x in 0..width {
             for i_y in (0..height).rev() {
                 let position = vec2(i_x as f32, i_y as f32);
-                let uv = position.div_element_wise(vec2(width as f32, height as f32));
-                let fragment = frag_shader(position, uv, &self.points[..]);
-                let pixel = self.image.get_pixel_mut(i_x, height - i_y - 1);
-                *pixel = [(fragment.clamp(0., 1.) * 255.0) as u8].into();
+                let uv = vec2(position.x / width as f32, position.y / height as f32);
+                let fragment = sd_contours(position, uv, &self.points[..]);
+                let pixel_index =
+                    ((height as usize) - (i_y as usize) - 1) * (width as usize) + (i_x as usize);
+                self.image[pixel_index] = fragment;
             }
         }
 
@@ -263,15 +297,22 @@ impl<'cx> TrueTypeChar<'cx> {
             data: Cow::Borrowed(self.image.as_ref()),
             width,
             height,
-            format: glium::texture::ClientFormat::U8,
+            format: glium::texture::ClientFormat::F32,
         };
         self.texture = Texture2d::with_format(
             &self.context().display,
             image,
-            glium::texture::UncompressedFloatFormat::U8,
-            glium::texture::MipmapsOption::NoMipmap,
+            glium::texture::UncompressedFloatFormat::F32,
+            glium::texture::MipmapsOption::AutoGeneratedMipmaps,
         )
         .unwrap();
+
+        let after = Instant::now();
+        let elapsed = after.duration_since(before);
+        println!(
+            "[DEBUG] font sampling took {} seconds (width = {width}, height = {height})",
+            elapsed.as_secs_f64()
+        );
     }
 
     pub(crate) fn draw(&mut self, frame: &mut glium::Frame, model: Matrix4<f32>) {
@@ -285,9 +326,9 @@ impl<'cx> TrueTypeChar<'cx> {
             projection: mesh::matrix4_to_array(projection),
             tex: self.texture
                     .sampled()
-                    .magnify_filter(glium::uniforms::MagnifySamplerFilter::Nearest)
-                    .minify_filter(glium::uniforms::MinifySamplerFilter::Nearest)
-                    .wrap_function(glium::uniforms::SamplerWrapFunction::Repeat),
+                    .magnify_filter(glium::uniforms::MagnifySamplerFilter::Linear)
+                    .minify_filter(glium::uniforms::MinifySamplerFilter::Linear)
+                    .wrap_function(glium::uniforms::SamplerWrapFunction::Clamp),
             },
             &self.context().shader_test_rect,
             &mesh::default_2d_draw_parameters(),
