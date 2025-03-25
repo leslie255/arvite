@@ -1,11 +1,17 @@
 use std::{
     borrow::Cow,
     mem::{self},
-    time::Instant,
 };
 
 use cgmath::*;
-use glium::{Texture2d, index::PrimitiveType};
+use glium::{
+    Texture2d,
+    index::PrimitiveType,
+    texture::{
+        ClientFormat, MipmapsOption, PixelValue, TextureCreationError, UncompressedFloatFormat,
+        buffer_texture::{BufferTexture, BufferTextureType},
+    },
+};
 
 use crate::{
     bezier,
@@ -21,6 +27,94 @@ use crate::{
 
 fn point_is_nan(point: Point2<f32>) -> bool {
     point.x.is_nan() && point.y.is_nan()
+}
+
+pub(crate) fn float_format(client_format: ClientFormat) -> Option<UncompressedFloatFormat> {
+    match client_format {
+        ClientFormat::U8 => Some(UncompressedFloatFormat::U8),
+        ClientFormat::U8U8 => Some(UncompressedFloatFormat::U8U8),
+        ClientFormat::U8U8U8 => Some(UncompressedFloatFormat::U8U8U8),
+        ClientFormat::U8U8U8U8 => Some(UncompressedFloatFormat::U8U8U8U8),
+        ClientFormat::I8 => Some(UncompressedFloatFormat::I8),
+        ClientFormat::I8I8 => Some(UncompressedFloatFormat::I8I8),
+        ClientFormat::I8I8I8 => Some(UncompressedFloatFormat::I8I8I8),
+        ClientFormat::I8I8I8I8 => Some(UncompressedFloatFormat::I8I8I8I8),
+        ClientFormat::U16 => Some(UncompressedFloatFormat::U16),
+        ClientFormat::U16U16 => Some(UncompressedFloatFormat::U16U16),
+        ClientFormat::U16U16U16 => Some(UncompressedFloatFormat::U16U16U16),
+        ClientFormat::U16U16U16U16 => Some(UncompressedFloatFormat::U16U16U16U16),
+        ClientFormat::I16 => Some(UncompressedFloatFormat::I16),
+        ClientFormat::I16I16 => Some(UncompressedFloatFormat::I16I16),
+        ClientFormat::I16I16I16 => Some(UncompressedFloatFormat::I16I16I16),
+        ClientFormat::I16I16I16I16 => Some(UncompressedFloatFormat::I16I16I16I16),
+        ClientFormat::U3U3U2 => Some(UncompressedFloatFormat::U3U3U2),
+        ClientFormat::U4U4U4U4 => Some(UncompressedFloatFormat::U4U4U4U4),
+        ClientFormat::U5U5U5U1 => Some(UncompressedFloatFormat::U5U5U5U1),
+        ClientFormat::U10U10U10U2 => Some(UncompressedFloatFormat::U10U10U10U2),
+        ClientFormat::F16 => Some(UncompressedFloatFormat::F16),
+        ClientFormat::F16F16 => Some(UncompressedFloatFormat::F16F16),
+        ClientFormat::F16F16F16 => Some(UncompressedFloatFormat::F16F16F16),
+        ClientFormat::F16F16F16F16 => Some(UncompressedFloatFormat::F16F16F16F16),
+        ClientFormat::F32 => Some(UncompressedFloatFormat::F32),
+        ClientFormat::F32F32 => Some(UncompressedFloatFormat::F32F32),
+        ClientFormat::F32F32F32 => Some(UncompressedFloatFormat::F32F32F32),
+        ClientFormat::F32F32F32F32 => Some(UncompressedFloatFormat::F32F32F32F32),
+        ClientFormat::U32
+        | ClientFormat::U32U32
+        | ClientFormat::U32U32U32
+        | ClientFormat::U32U32U32U32
+        | ClientFormat::I32
+        | ClientFormat::I32I32
+        | ClientFormat::I32I32I32
+        | ClientFormat::I32I32I32I32
+        | ClientFormat::U5U6U5
+        | ClientFormat::U1U5U5U5Reversed => None,
+    }
+}
+
+/// Make a 1D texture with no mipmap.
+pub(crate) fn make_texture_2d_with_mipmaps<T: PixelValue>(
+    context: &Context,
+    data: &[T],
+    size: Vector2<u32>,
+    mipmaps: MipmapsOption,
+) -> Result<Texture2d, TextureCreationError> {
+    let format = T::get_format();
+    let image = glium::texture::RawImage2d {
+        data: data.into(),
+        width: size.x,
+        height: size.y,
+        format,
+    };
+    Texture2d::with_format(
+        &context.display,
+        image,
+        float_format(format)
+            .unwrap_or_else(|| panic!("texture pixel format is float-like {format:?}")),
+        mipmaps,
+    )
+}
+
+/// Make a 2D texture with no mipmap.
+pub(crate) fn make_texture_2d<T: PixelValue>(
+    context: &Context,
+    data: &[T],
+    size: Vector2<u32>,
+) -> Result<Texture2d, TextureCreationError> {
+    make_texture_2d_with_mipmaps(context, data, size, MipmapsOption::NoMipmap)
+}
+
+pub(crate) fn buffer_texture<
+    T: glium::buffer::Content + glium::texture::buffer_texture::TextureBufferContent + Copy,
+>(
+    context: &Context,
+    data: &[T],
+    type_: BufferTextureType,
+) -> Result<BufferTexture<T>, glium::texture::buffer_texture::CreationError>
+where
+    [T]: glium::buffer::Content,
+{
+    BufferTexture::immutable(&context.display, data, type_)
 }
 
 /// Vertex used for `Rect` and `Path`s.
@@ -66,125 +160,28 @@ impl VertexWithColor {
 
 glium::implement_vertex!(VertexWithColor, position, color);
 
-/// Emulated fragment shader that outputs a monochrome color.
-fn sd_contours(_position: Vector2<f32>, uv: Vector2<f32>, contours: &[Vec<Vector2<f32>>]) -> f32 {
-    #[allow(non_camel_case_types)]
-    type vec2 = Vector2<f32>;
-    #[allow(non_camel_case_types)]
-    type vec3 = Vector3<f32>;
-    #[allow(non_camel_case_types)]
-    type vec4 = Vector4<f32>;
-    #[allow(non_camel_case_types)]
-    type bvec2 = Vector2<bool>;
-    #[allow(non_camel_case_types)]
-    type bvec3 = Vector3<bool>;
-    #[allow(non_camel_case_types)]
-    type bvec4 = Vector4<bool>;
-
-    #[inline(always)]
-    fn clamp(x: f32, min: f32, max: f32) -> f32 {
-        x.clamp(min, max)
-    }
-
-    #[inline(always)]
-    fn length(v: vec2) -> f32 {
-        (v.x.powi(2) + v.y.powi(2)).sqrt()
-    }
-
-    #[inline(always)]
-    fn dot(v0: vec2, v1: vec2) -> f32 {
-        v0.dot(v1)
-    }
-
-    #[inline(always)]
-    fn min(f0: f32, f1: f32) -> f32 {
-        f0.min(f1)
-    }
-
-    #[inline(always)]
-    fn max(f0: f32, f1: f32) -> f32 {
-        f0.max(f1)
-    }
-
-    #[inline(always)]
-    fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-        let x = clamp((x - edge0) / (edge1 - edge0), 0., 1.);
-        x.powi(2) * (3. - 2. * x)
-    }
-
-    #[inline(always)]
-    fn all3(bv: bvec3) -> bool {
-        bv.x && bv.y && bv.z
-    }
-
-    #[inline(always)]
-    fn not3(bv: bvec3) -> bvec3 {
-        vec3(!bv.x, !bv.y, !bv.z)
-    }
-
-    /// Also returns a flag that's true if it's clockwise.
-    fn sd_polygon(v: &[vec2], p: vec2) -> (bool, f32) {
-        if v.is_empty() {
-            return (false, 0.);
-        }
-        // The determinant for whether it's clockwise or counter-clockwise.
-        let mut dir_det = 0.0;
-        let mut d = dot(p - v[0], p - v[0]);
-        let mut s = 1.0;
-        for i in 0..v.len() {
-            let j = match i {
-                0 => v.len() - 1,
-                i => i - 1,
-            };
-            let v_i = unsafe { *v.get_unchecked(i) };
-            let v_j = unsafe { *v.get_unchecked(j) };
-            dir_det += (v_j.x - v_i.x) * (v_j.y + v_i.y);
-            let e = v_j - v_i;
-            let w = p - v_i;
-            let b = w - e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
-            d = min(d, dot(b, b));
-            let c = vec3(p.y >= v_i.y, p.y < v_j.y, e.x * w.y > e.y * w.x);
-            if all3(c) || all3(not3(c)) {
-                s *= -1.0
-            }
-        }
-        (dir_det.is_sign_positive(), s * d.sqrt())
-    }
-
-    let mut sd = 1.0;
-    for polygon in contours {
-        let (closewise, d) = sd_polygon(polygon, uv);
-        if !closewise {
-            sd = min(sd, d);
-        } else {
-            sd = max(sd, -max(sd, d));
-        }
-    }
-    sd
-}
-
-#[derive(Debug)]
-pub(crate) struct TrueTypeChar<'cx> {
+pub(crate) struct GlyphRect<'cx> {
     pub(crate) mesh: Mesh<'cx, VertexWithUV>,
-    pub(crate) image: Vec<f32>,
     pub(crate) image_size: Vector2<u32>,
-    pub(crate) texture: Texture2d,
     pub(crate) glyph: Option<SimpleGlyph>,
-    pub(crate) points: Vec<Vec<Vector2<f32>>>,
+    pub(crate) points: Vec<f32>,
+    pub(crate) contour_indices: Vec<i32>,
+    pub(crate) points_buffer_texture: Option<BufferTexture<f32>>,
+    pub(crate) contour_indices_buffer_texture: Option<BufferTexture<i32>>,
 }
 
-impl<'cx> TrueTypeChar<'cx> {
+impl<'cx> GlyphRect<'cx> {
     pub(crate) fn new(context: &'cx Context, font: &TrueTypeFont, char: char) -> Self {
         let mut self_ = Self {
             mesh: Mesh::new(context),
-            image: Vec::new(),
             image_size: vec2(0, 0),
-            texture: Texture2d::empty(&context.display, 1, 1).unwrap(),
             glyph: font.get_glyph(char as u32),
             points: Vec::new(),
+            contour_indices: Vec::new(),
+            points_buffer_texture: None,
+            contour_indices_buffer_texture: None,
         };
-        self_.rebuild_mesh_data();
-        self_.resample(128, 128);
+        self_.build_mesh_data();
         self_
     }
 
@@ -192,13 +189,11 @@ impl<'cx> TrueTypeChar<'cx> {
         self.mesh.context()
     }
 
-    pub(crate) fn rebuild_mesh_data(&mut self) {
+    fn build_mesh_data(&mut self) {
         let Some(ref glyph) = self.glyph else {
             return;
         };
         let glyph_header = glyph.header;
-        let glyph_x_min = glyph_header.x_min.to_i16();
-        let glyph_y_min = glyph_header.y_min.to_i16();
         let glyph_width = glyph_header
             .x_max
             .to_i16()
@@ -212,15 +207,56 @@ impl<'cx> TrueTypeChar<'cx> {
         let (vertices, indices) = self.mesh.vertices_indices_mut();
         vertices.clear();
         vertices.extend_from_slice(&[
-            VertexWithUV::new([0., 100.], [0., 1.]),
-            VertexWithUV::new([100. * aspect_ratio, 0.], [1., 0.]),
-            VertexWithUV::new([100. * aspect_ratio, 100.], [1., 1.]),
-            VertexWithUV::new([0., 0.], [0., 0.]),
+            VertexWithUV::new([0., 100.], [0., 0.]),
+            VertexWithUV::new([100. * aspect_ratio, 0.], [1., 1.]),
+            VertexWithUV::new([100. * aspect_ratio, 100.], [1., 0.]),
+            VertexWithUV::new([0., 0.], [0., 1.]),
         ]);
         indices.clear();
         indices.extend_from_slice(&[0, 1, 2, 1, 0, 3]);
 
-        let margin = 0.05f32;
+        self.initialize_points();
+    }
+
+    pub(crate) fn draw(&mut self, frame: &mut glium::Frame, model: Matrix4<f32>) {
+        self.mesh.update_if_needed();
+        let model_view = model;
+        let projection = self.context().projection_matrix();
+        if self.points_buffer_texture.is_none() {
+            self.make_points_buffer_texture();
+        }
+        self.mesh.draw(
+            frame,
+            glium::uniform! {
+                model_view: mesh::matrix4_to_array(model_view),
+                projection: mesh::matrix4_to_array(projection),
+                aaf: 1.0f32,
+                polygon_points: self.points_buffer_texture.as_ref().unwrap(),
+                i_start: 0i32,
+                i_end: self.points.len() as i32,
+            },
+            &self.context().shader_test_rect,
+            &glium::DrawParameters {
+                smooth: Some(glium::Smooth::Nicest),
+                ..mesh::default_2d_draw_parameters()
+            },
+        );
+    }
+
+    fn make_points_buffer_texture(&mut self) {
+        self.points_buffer_texture =
+            Some(buffer_texture(self.context(), &self.points, BufferTextureType::Float).unwrap());
+    }
+
+    fn initialize_points(&mut self) {
+        let glyph = self.glyph.as_ref().unwrap();
+        let glyph_header = glyph.header;
+        let glyph_x_min = glyph_header.x_min.to_i16();
+        let glyph_y_min = glyph_header.y_min.to_i16();
+        let glyph_width = glyph_header.x_max.to_i16().saturating_sub(glyph_x_min);
+        let glyph_height = glyph_header.y_max.to_i16().saturating_sub(glyph_y_min);
+
+        let margin = (1. / glyph_width as f32 + 1. / glyph_height as f32) / 2.;
         let mut points = Vec::new();
         let convert_point = move |point: Point2<i16>| -> Vector2<f32> {
             vec2(
@@ -232,107 +268,41 @@ impl<'cx> TrueTypeChar<'cx> {
                     + margin,
             )
         };
+        let mut add_point = |point: Vector2<f32>| {
+            points.push(point.x);
+            points.push(point.y);
+        };
         for contour in glyph.contours() {
-            let mut contour_points = Vec::new();
             let mut previous_point = None;
             for &curve in &contour.curves {
                 match curve {
-                    Curve::Linear(points) => {
-                        let [p0, p1] = points.map(convert_point);
+                    Curve::Linear(ps) => {
+                        let [p0, p1] = ps.map(convert_point);
                         if previous_point != Some(p0) {
-                            contour_points.push(p0);
+                            add_point(p0);
                         }
-                        contour_points.push(p1);
+                        add_point(p1);
                         previous_point = Some(p1);
                     }
-                    Curve::Quadratic(points) => {
-                        let [p0, p1, p2] = points.map(convert_point);
+                    Curve::Quadratic(ps) => {
+                        let ps @ [p0, _, p2] = ps.map(convert_point);
                         if previous_point != Some(p0) {
-                            contour_points.push(p0);
+                            add_point(p0);
                         }
                         let resolution = 8;
                         for i in 1..=resolution {
                             let t = i as f32 / resolution as f32;
-                            contour_points.push(
-                                bezier::bezier_quadratic(
-                                    [point2(p0.x, p0.y), point2(p1.x, p1.y), point2(p2.x, p2.y)],
-                                    t,
-                                )
-                                .to_vec(),
-                            );
+                            let [p0, p1, p2] = ps.map(|p| point2(p.x, p.y));
+                            add_point(bezier::bezier_quadratic([p0, p1, p2], t).to_vec());
                         }
-                        contour_points.push(p2);
+                        add_point(p2);
                         previous_point = Some(p2);
                     }
                 }
             }
-            points.push(contour_points);
         }
 
         self.points = points;
-    }
-
-    pub(crate) fn resample(&mut self, width: u32, height: u32) {
-        if self.image_size == vec2(width, height) {
-            return;
-        }
-
-        let before = Instant::now();
-
-        self.image = vec![0.0f32; (width as usize) * (height as usize)];
-        self.image_size = vec2(width, height);
-
-        for i_x in 0..width {
-            for i_y in (0..height).rev() {
-                let position = vec2(i_x as f32, i_y as f32);
-                let uv = vec2(position.x / width as f32, position.y / height as f32);
-                let fragment = sd_contours(position, uv, &self.points[..]);
-                let pixel_index =
-                    ((height as usize) - (i_y as usize) - 1) * (width as usize) + (i_x as usize);
-                self.image[pixel_index] = fragment;
-            }
-        }
-
-        let image = glium::texture::RawImage2d {
-            data: Cow::Borrowed(self.image.as_ref()),
-            width,
-            height,
-            format: glium::texture::ClientFormat::F32,
-        };
-        self.texture = Texture2d::with_format(
-            &self.context().display,
-            image,
-            glium::texture::UncompressedFloatFormat::F32,
-            glium::texture::MipmapsOption::AutoGeneratedMipmaps,
-        )
-        .unwrap();
-
-        let after = Instant::now();
-        let elapsed = after.duration_since(before);
-        println!(
-            "[DEBUG] font sampling took {} seconds (width = {width}, height = {height})",
-            elapsed.as_secs_f64()
-        );
-    }
-
-    pub(crate) fn draw(&mut self, frame: &mut glium::Frame, model: Matrix4<f32>) {
-        self.mesh.update_if_needed();
-        let model_view = model;
-        let projection = self.context().projection_matrix();
-        self.mesh.draw(
-            frame,
-            glium::uniform! {
-            model_view: mesh::matrix4_to_array(model_view),
-            projection: mesh::matrix4_to_array(projection),
-            tex: self.texture
-                    .sampled()
-                    .magnify_filter(glium::uniforms::MagnifySamplerFilter::Linear)
-                    .minify_filter(glium::uniforms::MinifySamplerFilter::Linear)
-                    .wrap_function(glium::uniforms::SamplerWrapFunction::Clamp),
-            },
-            &self.context().shader_test_rect,
-            &mesh::default_2d_draw_parameters(),
-        );
     }
 }
 

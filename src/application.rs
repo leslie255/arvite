@@ -22,7 +22,7 @@ use crate::{
     color::Color,
     context::Context,
     input::InputHelper,
-    shapes::{BezierSplinePath, Path, PathDrawingMode, TrueTypeChar},
+    shapes::{BezierSplinePath, Path, PathDrawingMode, GlyphRect},
     svg::SvgPathBuilder,
     text::Line,
     truetype::{TrueTypeFont, glyf::Curve},
@@ -126,10 +126,16 @@ impl Canvas {
         self.offset += delta / self.physical_scale();
     }
 
-    pub fn scale(&mut self, delta: f32) {
+    pub fn scale(&mut self, delta: f32, position_centered: Point2<f32>) {
         let mut scale = self.scale.ln();
         scale += delta;
-        self.scale = scale.exp().clamp(0.01, 100.);
+        if delta.is_sign_positive() {
+            self.move_(-position_centered.to_vec() * delta);
+        }
+        self.scale = scale.exp();
+        if delta.is_sign_negative() {
+            self.move_(-position_centered.to_vec() * delta);
+        }
     }
 }
 
@@ -198,7 +204,7 @@ pub struct Application<'cx> {
     font: TrueTypeFont,
     fps_text: Line<'static, 'cx>,
     spline: BezierSplinePath<'static, 'cx>,
-    test_rect: Option<TrueTypeChar<'cx>>,
+    test_rect: Option<GlyphRect<'cx>>,
     coordinate_markers: Vec<CoordinateMarker<'cx>>,
 }
 
@@ -265,7 +271,7 @@ impl<'cx> Application<'cx> {
     }
 
     fn set_character(&mut self, char: char) {
-        self.test_rect = Some(TrueTypeChar::new(self.context, &self.font, char));
+        self.test_rect = Some(GlyphRect::new(self.context, &self.font, char));
 
         self.current_char = char;
         self.spline.segments_mut().clear();
@@ -313,6 +319,10 @@ impl<'cx> Application<'cx> {
         // self.spline
         //     .draw(&mut frame, self.canvas.model(point2(0., 0.)));
 
+        if let Some(test_rect) = self.test_rect.as_mut() {
+            test_rect.draw(&mut frame, self.canvas.model(point2(0., -100.)));
+        }
+
         if self.show_fps {
             let (frame_width, frame_height) = frame.get_dimensions();
             self.fps_text.draw(
@@ -323,10 +333,6 @@ impl<'cx> Application<'cx> {
                     0.,
                 )),
             );
-        }
-
-        if let Some(test_rect) = self.test_rect.as_mut() {
-            test_rect.draw(&mut frame, self.canvas.model(point2(0., -100.)));
         }
 
         frame.finish().unwrap();
@@ -403,12 +409,12 @@ impl<'cx> Application<'cx> {
             KeyCode::Equal | KeyCode::NumpadAdd
                 if self.input_helper.control_is_down() | self.input_helper.super_is_down() =>
             {
-                self.canvas.scale(0.1);
+                self.canvas.scale(0.1, point2(0., 0.));
             }
             KeyCode::Minus | KeyCode::Minus
                 if self.input_helper.control_is_down() | self.input_helper.super_is_down() =>
             {
-                self.canvas.scale(-0.1);
+                self.canvas.scale(-0.1, point2(0., 0.));
             }
             KeyCode::Digit0 | KeyCode::Numpad0
                 if self.input_helper.control_is_down() | self.input_helper.super_is_down() =>
@@ -418,7 +424,7 @@ impl<'cx> Application<'cx> {
             KeyCode::Minus | KeyCode::Minus
                 if self.input_helper.control_is_down() | self.input_helper.super_is_down() =>
             {
-                self.canvas.scale(-0.1);
+                self.canvas.scale(-0.1, point2(0., 0.));
             }
             KeyCode::Delete | KeyCode::Backspace => match &mut self.selected_point {
                 Some((i, 1)) => {
@@ -516,20 +522,13 @@ impl<'cx> Application<'cx> {
 
     fn scrolled(&mut self, delta_physical: Vector2<f32>) {
         if self.input_helper.alt_is_down() {
+            let scale_delta = delta_physical.y / 240.;
             let position = self
                 .input_helper
                 .cursor_position_physical()
                 .unwrap_or(point2(0., 0.));
             let position_centered = position - self.frame_size() / 2.;
-            if delta_physical.y.is_sign_positive() {
-                self.canvas
-                    .move_(-position_centered.to_vec() * delta_physical.y / 240.);
-            }
-            self.canvas.scale(delta_physical.y / 240.);
-            if delta_physical.y.is_sign_negative() {
-                self.canvas
-                    .move_(-position_centered.to_vec() * delta_physical.y / 240.);
-            }
+            self.canvas.scale(scale_delta, position_centered);
         } else {
             self.canvas.move_(delta_physical);
         }
@@ -607,9 +606,7 @@ impl winit::application::ApplicationHandler for Application<'_> {
                     .cursor_position_physical()
                     .unwrap_or(point2(0., 0.));
                 let position_centered = position - self.frame_size() / 2.;
-                self.canvas.scale(delta as f32);
-                self.canvas
-                    .move_(-position_centered.to_vec() * delta as f32);
+                self.canvas.scale(delta as f32, position_centered);
             }
             winit::event::WindowEvent::CursorLeft { device_id: _ } => {
                 self.input_helper.notify_cursor_left();

@@ -19,22 +19,6 @@ pub fn matrix3_to_array<T>(matrix: Matrix3<T>) -> [[T; 3]; 3] {
     matrix.into()
 }
 
-pub fn texture_sampler(texture: &glium::Texture2d) -> glium::uniforms::Sampler<glium::Texture2d> {
-    texture
-        .sampled()
-        .magnify_filter(glium::uniforms::MagnifySamplerFilter::Nearest)
-        .minify_filter(glium::uniforms::MinifySamplerFilter::Nearest)
-        .wrap_function(glium::uniforms::SamplerWrapFunction::Repeat)
-}
-
-pub fn texture_sampler_linear(texture: &glium::Texture2d) -> glium::uniforms::Sampler<glium::Texture2d> {
-    texture
-        .sampled()
-        .magnify_filter(glium::uniforms::MagnifySamplerFilter::Linear)
-        .minify_filter(glium::uniforms::MinifySamplerFilter::Linear)
-        .wrap_function(glium::uniforms::SamplerWrapFunction::Repeat)
-}
-
 pub fn default_3d_draw_parameters() -> glium::DrawParameters<'static> {
     glium::DrawParameters {
         depth: glium::Depth {

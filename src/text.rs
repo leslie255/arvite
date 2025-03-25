@@ -125,7 +125,13 @@ impl AtlasFont {
     }
 
     pub fn texture_sampler(&self) -> glium::uniforms::Sampler<glium::Texture2d> {
-        mesh::texture_sampler(self.gl_texture.as_ref().unwrap())
+        self.gl_texture
+            .as_ref()
+            .unwrap()
+            .sampled()
+            .magnify_filter(glium::uniforms::MagnifySamplerFilter::Nearest)
+            .minify_filter(glium::uniforms::MinifySamplerFilter::Nearest)
+            .wrap_function(glium::uniforms::SamplerWrapFunction::Repeat)
     }
 }
 

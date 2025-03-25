@@ -52,7 +52,10 @@ impl Context {
     ) -> glium::Program {
         let vs_source = resource_loader.read_to_string(format!("{name}.vs"));
         let fs_source = resource_loader.read_to_string(format!("{name}.fs"));
-        glium::Program::from_source(display, &vs_source, &fs_source, None).unwrap()
+        glium::Program::from_source(display, &vs_source, &fs_source, None).unwrap_or_else(|e| {
+            println!("[ERROR] unable to compile shader {name:?}, error message:\n{e}");
+            panic!()
+        })
     }
 
     fn load_font(
