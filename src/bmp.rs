@@ -16,10 +16,14 @@ pub enum PixelFormat {
     Bgra8Srgb,
 }
 
+fn gamma_correct(u_in: u8, gamma: f32) -> u8 {
+    let f_in = (u_in as f32) / 255.0;
+    let f_out = f_in.powf(gamma);
+    (f_out * 255.0).floor() as u8
+}
+
 fn srgb_to_rgb(srgb: u8) -> u8 {
-    let f_srgb = (srgb as f32) / 255.0;
-    let f_rgb = f_srgb.powf(1.0 / 2.2);
-    (f_rgb * 255.0).floor() as u8
+    gamma_correct(srgb, 1.0 / 2.2)
 }
 
 fn bmp_header(data: &mut Vec<u8>, size: Vector2<u32>) {

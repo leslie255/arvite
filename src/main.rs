@@ -10,7 +10,10 @@ pub mod shapes;
 pub mod texture;
 mod utils;
 
+use bind_group::BindGroupBuilder;
+use buffer::{IndexBuffer, Vertex2d, VertexBuffer};
 use context::{Context, Surface};
+use pipeline::PipelineBuilder;
 use shapes::{Circle, ClassicText, Rectangle, TexturedRectangle};
 use texture::Texture2d;
 
@@ -138,11 +141,8 @@ struct Application<'cx, 'window> {
     /// If the current frame was the first frame after a resize.
     is_first_frame_after_resize: bool,
     frame_counter: u64,
-    rectangle0: Option<Rectangle<'cx>>,
+    rectangle0: Option<TexturedRectangle<'cx>>,
     rectangle1: Option<TexturedRectangle<'cx>>,
-    circle: Option<Circle<'cx>>,
-    text: Option<ClassicText<'cx>>,
-    texture: Option<Texture2d>,
 }
 
 impl<'cx, 'window> Application<'cx, 'window> {
@@ -163,9 +163,6 @@ impl<'cx, 'window> Application<'cx, 'window> {
             frame_counter: 0,
             rectangle0: None,
             rectangle1: None,
-            circle: None,
-            text: None,
-            texture: None,
         }
     }
 
@@ -175,7 +172,7 @@ impl<'cx, 'window> Application<'cx, 'window> {
         }
     }
 
-    fn draw_texture(&mut self) -> Texture2d {
+    fn draw_texture0(&self) -> Texture2d {
         let size = vec2(1024, 1024);
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let texture = Texture2d::drawable_bindable(self.context, size, format);
@@ -190,15 +187,6 @@ impl<'cx, 'window> Application<'cx, 'window> {
 
         let mut render_pass =
             surface.create_render_pass(&mut encoder, Some(wgpu::Color::WHITE), None, None, None);
-
-        let mut text = ClassicText::new(self.context, &surface);
-        *text.string_mut() = String::from("This is a texture");
-        text.set_fg_color(vec4(0.0, 0.0, 0.0, 1.0));
-        text.draw(
-            &surface,
-            &mut render_pass,
-            Matrix4::from_translation(vec3(-512.0, 512.0, 0.0)),
-        );
 
         let mut circle = Circle::new(self.context, &surface)
             .with_fill_color(vec4(0.5, 0.5, 1.0, 1.0))
@@ -225,13 +213,120 @@ impl<'cx, 'window> Application<'cx, 'window> {
         draw_rectangle(384.0, vec3(1.0, 0.0, 1.0));
         draw_rectangle(256.0, vec3(0.0, 1.0, 1.0));
 
+        let mut text = ClassicText::new(self.context, &surface);
+        *text.string_mut() = String::from("This\nIs\nA\nTexture");
+        *text.text_height_mut() = 72.0;
+        text.set_fg_color(vec4(0.0, 0.0, 0.0, 1.0));
+        text.draw(
+            &surface,
+            &mut render_pass,
+            Matrix4::from_translation(vec3(-512.0, 512.0, 0.0)),
+        );
+
         drop(render_pass);
 
         self.context.wgpu_queue.submit([encoder.finish()]);
 
         let texture_data =
             read_data_from_texture(self.context, size.x, size.y, &texture.wgpu_texture);
-        bmp::save_bmp("debug.bmp", size, bmp::PixelFormat::Rgba8, &texture_data).unwrap();
+        bmp::save_bmp("texture0.bmp", size, bmp::PixelFormat::Rgba8, &texture_data).unwrap();
+
+        texture
+    }
+
+    fn draw_texture1(&self) -> Texture2d {
+        let size = vec2(4096, 4096);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let texture = Texture2d::drawable_bindable(self.context, size, format);
+        let texture_view = texture.create_view();
+
+        let surface = Surface::for_texture(texture_view);
+
+        let mut encoder = self
+            .context
+            .wgpu_device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
+        let mut render_pass =
+            surface.create_render_pass(&mut encoder, Some(wgpu::Color::WHITE), None, None, None);
+
+        let shader = wgsl! {
+            fn mandelbrot(c: vec2<f32>) -> f32 {
+                let B: f32 = 256.0;
+                var n: f32 = 0.0;
+                var z: vec2<f32> = vec2<f32>(0.0, 0.0);
+                for (var i: i32 = 0; i < 512; i = i + 1) {
+                    z = vec2<f32>(
+                        z.x * z.x - z.y * z.y,
+                        2.0 * z.x * z.y
+                    ) + c;
+                    if dot(z, z) > B * B {
+                        break;
+                    }
+                    n = n + 1.0;
+                }
+                return select(n, 0.0, n > 511.0);
+            }
+
+            struct VertexOutput {
+                @location(0) uv: vec2<f32>,
+                @builtin(position) position: vec4<f32>,
+            };
+
+
+            @vertex
+            fn vs_main(@location(0) position: vec2<f32>) -> VertexOutput {
+                var result: VertexOutput;
+                result.uv = position;
+                result.position = vec4<f32>(position.xy, 0.0, 1.0);
+                return result;
+            }
+
+            @fragment
+            fn fs_main(vertex: VertexOutput) -> @location(0) vec4<f32> {
+                let n = mandelbrot(vertex.uv);
+                return vec4<f32>(
+                    smoothstep(n, 0.0, 12.0),
+                    smoothstep(n, 0.0, 6.0),
+                    smoothstep(n, 0.0, 2.0),
+                    1.0,
+                );
+            }
+        }
+        .compile(self.context);
+
+        let vertex_buffer = VertexBuffer::new_initialized(self.context, &[
+            Vertex2d::new([-1.0, -1.0]),
+            Vertex2d::new([1.0, -1.0]),
+            Vertex2d::new([1.0, 1.0]),
+            Vertex2d::new([-1.0, 1.0]),
+        ]);
+        let index_buffer = IndexBuffer::<u16>::new_initialized(self.context, &[0, 1, 2, 2, 3, 0]);
+        let render_pipeline = {
+            let mut builder = PipelineBuilder::new(self.context, &shader);
+            builder.texture_format(format);
+            builder.add_vertex_buffer(&vertex_buffer);
+            builder.build()
+        };
+        let bind_group = {
+            let layout = render_pipeline.get_bind_group_layout(0);
+            BindGroupBuilder::new(self.context, &layout).build()
+        };
+        render_pass.set_pipeline(&render_pipeline);
+        render_pass.set_bind_group(0, &bind_group, &[]);
+        vertex_buffer.set(&mut render_pass, 0, ..);
+        index_buffer.set(&mut render_pass, ..);
+        render_pass.draw_indexed(0..6, 0, 0..1);
+
+        _ = &mut render_pass;
+
+        drop(render_pass);
+
+        self.context.wgpu_queue.submit([encoder.finish()]);
+
+        let texture_data =
+            read_data_from_texture(self.context, size.x, size.y, &texture.wgpu_texture);
+        bmp::save_bmp("texture1.bmp", size, bmp::PixelFormat::Rgba8, &texture_data).unwrap();
 
         texture
     }
@@ -252,45 +347,41 @@ impl<'cx, 'window> Application<'cx, 'window> {
             None,
         );
 
-        if self.text.is_none() {
-            self.texture = Some(self.draw_texture());
+        let scale_factor = self.window.map(|w| w.scale_factor() as f32).unwrap_or(1.0);
+
+        let rectangle_size = vec2(256.0, 256.0) * scale_factor;
+
+        if self.rectangle0.is_none() {
+            let texture_view = self.draw_texture0().create_view();
+            let rectangle =
+                TexturedRectangle::new(self.context, &self.window_surface, texture_view)
+                    .with_gamma(2.2);
+            self.rectangle0 = Some(rectangle);
         }
+        let rectangle0 = self.rectangle0.as_mut().unwrap();
+        *rectangle0.size_mut() = rectangle_size;
+        let position = point2(-rectangle_size.x / 2.0, 0.0) - rectangle_size / 2.0;
+        rectangle0.draw(
+            &self.window_surface,
+            &mut render_pass,
+            Matrix4::from_translation(position.to_vec().extend(0.0)),
+        );
 
-        let rectangle0 = self.rectangle0.get_or_insert_with(|| {
-            Rectangle::new(self.context, &self.window_surface)
-                .with_size(vec2(128.0, 128.0))
-                .with_fill_color(vec4(0.2, 0.8, 1.0, 1.0))
-        });
-        rectangle0.draw(&self.window_surface, &mut render_pass, Matrix4::identity());
-
-        let rectangle1 = self.rectangle1.get_or_insert_with(|| {
-            TexturedRectangle::new(
-                self.context,
-                &self.window_surface,
-                self.texture.as_ref().unwrap(),
-            )
-            .with_size(vec2(128.0, 128.0))
-        });
+        if self.rectangle1.is_none() {
+            let texture_view = self.draw_texture1().create_view();
+            let rectangle =
+                TexturedRectangle::new(self.context, &self.window_surface, texture_view)
+                    .with_gamma(2.2);
+            self.rectangle1 = Some(rectangle);
+        }
+        let rectangle1 = self.rectangle1.as_mut().unwrap();
+        *rectangle1.size_mut() = rectangle_size;
+        let position = point2(rectangle_size.x / 2.0, 0.0) - rectangle_size / 2.0;
         rectangle1.draw(
             &self.window_surface,
             &mut render_pass,
-            Matrix4::from_translation(vec3(128.0, 0.0, 0.0)),
+            Matrix4::from_translation(position.to_vec().extend(0.0)),
         );
-
-        let circle = self.circle.get_or_insert_with(|| {
-            Circle::new(self.context, &self.window_surface)
-                .with_outer_radius(128.0)
-                .with_inner_radius(64.0)
-                .with_fill_color(vec4(0.8, 0.2, 0.2, 1.0))
-        });
-        circle.draw(&self.window_surface, &mut render_pass, Matrix4::identity());
-
-        let text = self.text.get_or_insert_with(|| {
-            let mut text = ClassicText::new(self.context, &self.window_surface);
-            *text.string_mut() = String::from("Hello, world");
-            text
-        });
-        text.draw(&self.window_surface, &mut render_pass, Matrix4::identity());
 
         drop(render_pass);
 

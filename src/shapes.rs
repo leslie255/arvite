@@ -5,7 +5,7 @@ use crate::buffer::{IndexBuffer, UniformBuffer, Vertex2d, Vertex2dUV, VertexBuff
 use crate::context::{Context, Surface};
 use crate::include_wgsl;
 use crate::pipeline::PipelineBuilder;
-use crate::texture::{SamplerBuilder, Texture2d};
+use crate::texture::{SamplerBuilder, Texture2d, TextureView2d};
 
 use cgmath::*;
 
@@ -73,14 +73,18 @@ impl ClassicFont {
     }
 
     pub fn has_glyph(&self, char: char) -> bool {
-        self.present_range.contains(&(char as u8))
+        match u8::try_from(char as u32) {
+            Ok(u) => self.present_range.contains(&u),
+            Err(_) => false,
+        }
     }
 
     pub fn position_for_glyph(&self, char: char) -> Option<Vector2<u32>> {
         if !self.has_glyph(char) {
             return None;
         }
-        let ith_glyph = ((char as u8).checked_sub(*self.present_range.start())?) as u32;
+        let range_start = *self.present_range.start();
+        let ith_glyph = ((char as u8).checked_sub(range_start)?) as u32;
         let glyph_coord = vec2(
             ith_glyph.checked_rem(self.glyphs_per_line)?,
             ith_glyph.checked_div(self.glyphs_per_line)?,
@@ -506,19 +510,20 @@ pub struct TexturedRectangle<'cx> {
 
     pub(crate) uniform0_model_view: UniformBuffer<[[f32; 4]; 4]>,
     pub(crate) uniform1_projection: UniformBuffer<[[f32; 4]; 4]>,
+    pub(crate) uniform2_gamma: UniformBuffer<f32>,
 
     pub(crate) size: Vector2<f32>,
+    pub(crate) gamma: f32,
 }
 
 impl<'cx> TexturedRectangle<'cx> {
-    pub fn new(context: &'cx Context, surface: &Surface, texture: &Texture2d) -> Self {
+    pub fn new(context: &'cx Context, surface: &Surface, texture_view: TextureView2d) -> Self {
         let vertex_buffer = VertexBuffer::new_initialized(context, &SQUARE_VERTICES_UV);
         let index_buffer = IndexBuffer::new_initialized(context, &SQUARE_INDICES);
 
         let uniform0_model_view = UniformBuffer::<[[f32; 4]; 4]>::new_zeroed(context);
         let uniform1_projection = UniformBuffer::<[[f32; 4]; 4]>::new_zeroed(context);
-
-        let texture_view = texture.create_view();
+        let uniform2_gamma = UniformBuffer::<f32>::new_zeroed(context);
 
         let sampler = SamplerBuilder::new(context)
             .mag_filter(wgpu::FilterMode::Linear)
@@ -529,10 +534,12 @@ impl<'cx> TexturedRectangle<'cx> {
         let pipeline = || {
             let shader = include_wgsl!(context, "./shaders/rectangle_textured.wgsl");
             let mut builder = PipelineBuilder::new(context, &shader);
+            builder.texture_format(surface.format());
             builder.bind_resource(0, &uniform0_model_view);
             builder.bind_resource(1, &uniform1_projection);
-            builder.bind_resource(2, &texture_view);
-            builder.bind_resource(3, &sampler);
+            builder.bind_resource(2, &uniform2_gamma);
+            builder.bind_resource(3, &texture_view);
+            builder.bind_resource(4, &sampler);
             builder.add_vertex_buffer(&vertex_buffer);
             builder.build()
         };
@@ -546,8 +553,9 @@ impl<'cx> TexturedRectangle<'cx> {
             let mut builder = BindGroupBuilder::new(context, &layout);
             builder.bind_resource(0, &uniform0_model_view);
             builder.bind_resource(1, &uniform1_projection);
-            builder.bind_resource(2, &texture_view);
-            builder.bind_resource(3, &sampler);
+            builder.bind_resource(2, &uniform2_gamma);
+            builder.bind_resource(3, &texture_view);
+            builder.bind_resource(4, &sampler);
             builder.build()
         };
 
@@ -560,7 +568,9 @@ impl<'cx> TexturedRectangle<'cx> {
             index_buffer,
             uniform0_model_view,
             uniform1_projection,
+            uniform2_gamma,
             size: vec2(100.0, 100.0),
+            gamma: 1.0,
         }
     }
 
@@ -597,6 +607,7 @@ impl<'cx> TexturedRectangle<'cx> {
             .write(self.context, (model * self.model_matrix()).into());
         self.uniform1_projection
             .write(self.context, surface.projection_matrix().into());
+        self.uniform2_gamma.write(self.context, self.gamma);
 
         // Draw.
         render_pass.draw_indexed(0..(SQUARE_INDICES.len() as u32), 0, 0..1);
@@ -614,6 +625,19 @@ impl<'cx> TexturedRectangle<'cx> {
 
     pub fn with_size(mut self, size: Vector2<f32>) -> Self {
         *self.size_mut() = size;
+        self
+    }
+
+    pub fn gamma(&self) -> f32 {
+        self.gamma
+    }
+
+    pub fn gamma_mut(&mut self) -> &mut f32 {
+        &mut self.gamma
+    }
+
+    pub fn with_gamma(mut self, size: f32) -> Self {
+        *self.gamma_mut() = size;
         self
     }
 }

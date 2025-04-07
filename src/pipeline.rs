@@ -10,6 +10,28 @@ macro_rules! include_wgsl {
     };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WgslShaderSource<'a>(pub &'a str);
+
+impl WgslShaderSource<'_> {
+    pub fn compile(self, context: &Context) -> wgpu::ShaderModule {
+        let source = self.0;
+        context
+            .wgpu_device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            })
+    }
+}
+
+#[macro_export]
+macro_rules! wgsl {
+    ($($tts:tt)*) => {
+        $crate::pipeline::WgslShaderSource(stringify!($($tts)*))
+    };
+}
+
 pub fn wgsl_shader(context: &Context, source: &str) -> wgpu::ShaderModule {
     context
         .wgpu_device
