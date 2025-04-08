@@ -20,7 +20,11 @@ fn vs_main(@location(0) position: vec2<f32>, @location(1) uv: vec2<f32>) -> Vert
 
 @fragment
 fn fs_main(vertex: VertexOutput) -> @location(0) vec4<f32> {
-    var sample = textureSample(the_texture, the_sampler, vertex.uv);
-    sample = pow(sample, vec4<f32>(gamma));
-    return sample;
+    let sample = textureSample(the_texture, the_sampler, vertex.uv);
+    return vec4<f32>(
+        pow(sample.x, gamma),
+        pow(sample.y, gamma),
+        pow(sample.z, gamma),
+        sample.a,
+    );
 }

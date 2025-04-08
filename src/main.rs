@@ -1,4 +1,4 @@
-#![feature(array_chunks)]
+#![feature(array_chunks, f16)]
 #![allow(linker_messages)]
 
 pub mod bind_group;
@@ -13,7 +13,7 @@ mod utils;
 use bind_group::BindGroupBuilder;
 use buffer::{IndexBuffer, Vertex2d, VertexBuffer};
 use context::{Context, Surface};
-use pipeline::PipelineBuilder;
+use pipeline::{PipelineBuilder, WgslShaderSource};
 use shapes::{Circle, ClassicText, Rectangle, TexturedRectangle};
 use texture::Texture2d;
 
@@ -23,6 +23,7 @@ use winit::{
     application::ApplicationHandler, event::WindowEvent, event_loop::EventLoop, window::Window,
 };
 
+#[allow(dead_code)]
 fn map_buffer(buffer_slice: wgpu::BufferSlice) {
     buffer_slice.map_async(wgpu::MapMode::Read, |result| result.unwrap());
 }
@@ -30,6 +31,7 @@ fn map_buffer(buffer_slice: wgpu::BufferSlice) {
 /// `width * target_pixel_byte_cost` must be a multiple of `256`. This is required because `copy_texture_to_buffer` requires
 /// texture with bytes per row of multiple of `256`.
 /// Texture also cannot be in any compressed formats.
+#[allow(dead_code)]
 fn read_data_from_texture(
     context: &Context,
     width: u32,
@@ -90,49 +92,50 @@ fn read_data_from_texture(
     result_data
 }
 
-fn mandelbrot(size: u32, x: u32, y: u32) -> u8 {
-    // Copied from:
-    // https://github.com/gfx-rs/wgpu/blob/trunk/examples/features/src/cube/mod.rs
-    let cx = 3.0 * x as f32 / (size - 1) as f32 - 2.0;
-    let cy = 2.0 * y as f32 / (size - 1) as f32 - 1.0;
-    let (mut x, mut y, mut count) = (cx, cy, 0);
-    while count < 255 && x * x + y * y < 4.0 {
-        let old_x = x;
-        x = x * x - y * y + cx;
-        y = 2.0 * old_x * y + cy;
-        count += 1;
-    }
-    count
-}
-
-#[expect(dead_code)]
-fn make_mandelbrot_texture(context: &Context, size: usize, color: Vector3<f32>) -> Texture2d {
-    let texture_data: Vec<u8> = {
-        let mut data = Vec::with_capacity(size * size * 4);
-        for y in 0..(size as u32) {
-            for x in 0..(size as u32) {
-                let sample = (mandelbrot(size as u32, x, size as u32 - y) as f32) / 255.0;
-                let color = vec3(
-                    (sample.ln() / color.x).exp(),
-                    (sample.ln() / color.y).exp(),
-                    (sample.ln() / color.z).exp(),
-                );
-                data.push((color.x * 255.0) as u8);
-                data.push((color.y * 255.0) as u8);
-                data.push((color.z * 255.0) as u8);
-                data.push(255);
+const MANDELBROT_WGSL: WgslShaderSource<'_> = wgsl! {
+    fn mandelbrot(c: vec2<f32>) -> f32 {
+        let B: f32 = 256.0;
+        var n: f32 = 0.0;
+        var z: vec2<f32> = vec2<f32>(0.0, 0.0);
+        for (var i: i32 = 0; i < 512; i = i + 1) {
+            z = vec2<f32>(
+                z.x * z.x - z.y * z.y,
+                2.0 * z.x * z.y
+            ) + c;
+            if dot(z, z) > B * B {
+                break;
             }
+            n = n + 1.0;
         }
-        data
+        return select(n, 0.0, n > 511.0);
+    }
+
+    struct VertexOutput {
+        @location(0) uv: vec2<f32>,
+        @builtin(position) position: vec4<f32>,
     };
-    let texture = Texture2d::new(
-        context,
-        vec2(size as u32, size as u32),
-        wgpu::TextureFormat::Rgba8Unorm,
-    );
-    texture.write(context, &texture_data);
-    texture
-}
+
+    @vertex
+    fn vs_main(@location(0) position: vec2<f32>) -> VertexOutput {
+        var result: VertexOutput;
+        result.uv = position;
+        result.position = vec4<f32>(position.xy, 0.0, 1.0);
+        return result;
+    }
+
+    @fragment
+    fn fs_main(vertex: VertexOutput) -> @location(0) vec4<f32> {
+        // Some simple scaling and movements.
+        let c = vertex.uv * 1.2 - vec2<f32>(0.5, 0.0);
+        let n = mandelbrot(c);
+        return vec4<f32>(
+            smoothstep(n, 0.0, 12.0),
+            smoothstep(n, 0.0, 6.0),
+            smoothstep(n, 0.0, 2.0),
+            1.0,
+        );
+    }
+};
 
 struct Application<'cx, 'window> {
     window: Option<&'window Window>,
@@ -227,15 +230,15 @@ impl<'cx, 'window> Application<'cx, 'window> {
 
         self.context.wgpu_queue.submit([encoder.finish()]);
 
-        let texture_data =
-            read_data_from_texture(self.context, size.x, size.y, &texture.wgpu_texture);
-        bmp::save_bmp("texture0.bmp", size, bmp::PixelFormat::Rgba8, &texture_data).unwrap();
+        // let texture_data =
+        //     read_data_from_texture(self.context, size.x, size.y, &texture.wgpu_texture);
+        // bmp::save_bmp("texture0.bmp", size, bmp::PixelFormat::Rgba8, &texture_data).unwrap();
 
         texture
     }
 
     fn draw_texture1(&self) -> Texture2d {
-        let size = vec2(4096, 4096);
+        let size = vec2(2048, 2048);
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let texture = Texture2d::drawable_bindable(self.context, size, format);
         let texture_view = texture.create_view();
@@ -250,50 +253,7 @@ impl<'cx, 'window> Application<'cx, 'window> {
         let mut render_pass =
             surface.create_render_pass(&mut encoder, Some(wgpu::Color::WHITE), None, None, None);
 
-        let shader = wgsl! {
-            fn mandelbrot(c: vec2<f32>) -> f32 {
-                let B: f32 = 256.0;
-                var n: f32 = 0.0;
-                var z: vec2<f32> = vec2<f32>(0.0, 0.0);
-                for (var i: i32 = 0; i < 512; i = i + 1) {
-                    z = vec2<f32>(
-                        z.x * z.x - z.y * z.y,
-                        2.0 * z.x * z.y
-                    ) + c;
-                    if dot(z, z) > B * B {
-                        break;
-                    }
-                    n = n + 1.0;
-                }
-                return select(n, 0.0, n > 511.0);
-            }
-
-            struct VertexOutput {
-                @location(0) uv: vec2<f32>,
-                @builtin(position) position: vec4<f32>,
-            };
-
-
-            @vertex
-            fn vs_main(@location(0) position: vec2<f32>) -> VertexOutput {
-                var result: VertexOutput;
-                result.uv = position;
-                result.position = vec4<f32>(position.xy, 0.0, 1.0);
-                return result;
-            }
-
-            @fragment
-            fn fs_main(vertex: VertexOutput) -> @location(0) vec4<f32> {
-                let n = mandelbrot(vertex.uv);
-                return vec4<f32>(
-                    smoothstep(n, 0.0, 12.0),
-                    smoothstep(n, 0.0, 6.0),
-                    smoothstep(n, 0.0, 2.0),
-                    1.0,
-                );
-            }
-        }
-        .compile(self.context);
+        let shader = MANDELBROT_WGSL.compile(self.context);
 
         let vertex_buffer = VertexBuffer::new_initialized(self.context, &[
             Vertex2d::new([-1.0, -1.0]),
@@ -324,9 +284,9 @@ impl<'cx, 'window> Application<'cx, 'window> {
 
         self.context.wgpu_queue.submit([encoder.finish()]);
 
-        let texture_data =
-            read_data_from_texture(self.context, size.x, size.y, &texture.wgpu_texture);
-        bmp::save_bmp("texture1.bmp", size, bmp::PixelFormat::Rgba8, &texture_data).unwrap();
+        // let texture_data =
+        //     read_data_from_texture(self.context, size.x, size.y, &texture.wgpu_texture);
+        // bmp::save_bmp("texture1.bmp", size, bmp::PixelFormat::Rgba8, &texture_data).unwrap();
 
         texture
     }
@@ -352,10 +312,13 @@ impl<'cx, 'window> Application<'cx, 'window> {
         let rectangle_size = vec2(256.0, 256.0) * scale_factor;
 
         if self.rectangle0.is_none() {
-            let texture_view = self.draw_texture0().create_view();
+            let (duration, texture) = time(|| self.draw_texture0());
+            println!(
+                "[INFO] texture 0 took {} seconds to draw",
+                duration.as_secs_f64()
+            );
             let rectangle =
-                TexturedRectangle::new(self.context, &self.window_surface, texture_view)
-                    .with_gamma(2.2);
+                TexturedRectangle::new(self.context, &self.window_surface, texture.create_view());
             self.rectangle0 = Some(rectangle);
         }
         let rectangle0 = self.rectangle0.as_mut().unwrap();
@@ -368,10 +331,13 @@ impl<'cx, 'window> Application<'cx, 'window> {
         );
 
         if self.rectangle1.is_none() {
-            let texture_view = self.draw_texture1().create_view();
+            let (duration, texture) = time(|| self.draw_texture1());
+            println!(
+                "[INFO] texture 1 took {} seconds to draw",
+                duration.as_secs_f64()
+            );
             let rectangle =
-                TexturedRectangle::new(self.context, &self.window_surface, texture_view)
-                    .with_gamma(2.2);
+                TexturedRectangle::new(self.context, &self.window_surface, texture.create_view());
             self.rectangle1 = Some(rectangle);
         }
         let rectangle1 = self.rectangle1.as_mut().unwrap();

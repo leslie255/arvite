@@ -570,7 +570,7 @@ impl<'cx> TexturedRectangle<'cx> {
             uniform1_projection,
             uniform2_gamma,
             size: vec2(100.0, 100.0),
-            gamma: 1.0,
+            gamma: 2.2,
         }
     }
 

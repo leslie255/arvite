@@ -12,6 +12,7 @@ use cgmath::Vector2;
 pub enum PixelFormat {
     Rgba8,
     Rgba8Srgb,
+    Rgba16Float,
     Bgra8,
     Bgra8Srgb,
 }
@@ -24,6 +25,10 @@ fn gamma_correct(u_in: u8, gamma: f32) -> u8 {
 
 fn srgb_to_rgb(srgb: u8) -> u8 {
     gamma_correct(srgb, 1.0 / 2.2)
+}
+
+fn f16_to_u8(f: f16) -> u8 {
+    (f as f32 * 255.0).clamp(0.0, 255.0) as u8
 }
 
 fn bmp_header(data: &mut Vec<u8>, size: Vector2<u32>) {
@@ -80,7 +85,21 @@ pub fn encode_bmp(size: Vector2<u32>, format: PixelFormat, pixel_data: &[u8]) ->
         }
         PixelFormat::Rgba8Srgb => {
             encode_bmp_with(size, pixel_data.array_chunks::<4>().copied(), |src| {
-                [src[2], src[1], src[0], src[3]].map(srgb_to_rgb)
+                [
+                    srgb_to_rgb(src[2]),
+                    srgb_to_rgb(src[1]),
+                    srgb_to_rgb(src[0]),
+                    src[3],
+                ]
+            })
+        }
+        PixelFormat::Rgba16Float => {
+            encode_bmp_with(size, pixel_data.array_chunks::<8>().copied(), |src| {
+                let r = f16::from_ne_bytes([src[0], src[1]]);
+                let g = f16::from_ne_bytes([src[2], src[3]]);
+                let b = f16::from_ne_bytes([src[4], src[5]]);
+                let a = f16::from_ne_bytes([src[6], src[7]]);
+                [b, g, r, a].map(f16_to_u8)
             })
         }
         PixelFormat::Bgra8 => {
@@ -90,7 +109,12 @@ pub fn encode_bmp(size: Vector2<u32>, format: PixelFormat, pixel_data: &[u8]) ->
         }
         PixelFormat::Bgra8Srgb => {
             encode_bmp_with(size, pixel_data.array_chunks::<4>().copied(), |src| {
-                [src[0], src[1], src[2], src[3]].map(srgb_to_rgb)
+                [
+                    srgb_to_rgb(src[0]),
+                    srgb_to_rgb(src[1]),
+                    srgb_to_rgb(src[2]),
+                    src[3],
+                ]
             })
         }
     }
